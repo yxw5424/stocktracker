@@ -1,0 +1,51 @@
+# ───────────────────────────────────────────────────────────────
+# 监控配置 —— 改这里就能调整标的 / 阈值 / 节奏 / 渠道,不用动代码
+# ───────────────────────────────────────────────────────────────
+
+targets:
+  - code: "600909"
+    name: "华安证券"
+    levels: []          # 关键价位线(突破告警),如 [7.0, 8.16];留空则不判突破
+  - code: "603009"
+    name: "北特科技"
+    levels: []
+
+market:
+  timezone: "Asia/Shanghai"
+  sessions:             # A股交易时段(本地时间),非交易时段不取数
+    - ["09:30", "11:30"]
+    - ["13:00", "15:00"]
+
+analysis:
+  bar_period: "15"      # 分钟K线周期: 1 / 5 / 15 / 30 / 60
+  slope_window: 8       # 用最近 N 根 bar 算斜率与量比
+
+triggers:
+  pct_change:           # ① 区间涨跌幅
+    enabled: true
+    window_minutes: 60
+    threshold_pct: 3.0  # |60分钟涨跌幅| ≥ 3% 触发
+  slope_surge:          # ② 斜率/动量激增(你最在意的)→ 会切换到高频节奏
+    enabled: true
+    slope_threshold: 4.0   # 斜率绝对值 ≥ 4 %/小时
+    accel_threshold: 3.0   # 或 斜率较上次加速 ≥ 3 %/小时
+  volume_spike:         # ③ 放量异动
+    enabled: true
+    ratio_threshold: 2.0   # 当前bar量 / 近期均量 ≥ 2
+  breakout:             # ④ 突破关键价位(需 target.levels 非空)
+    enabled: true
+
+cadence:                # 自适应汇报节奏
+  base_interval_minutes: 60      # 正常:最多每 60 分钟汇报一次
+  fast_interval_minutes: 15      # 斜率激增后:每 15 分钟汇报
+  fast_mode_cooldown_minutes: 45 # 激增后保持高频多久
+  alert_dedup_minutes: 15        # 同类告警去重窗口,防刷屏(建议 ≤ fast_interval)
+
+notify:
+  # 渠道开关说明:凭证放 环境变量 / GitHub Secrets,不写在这里
+  # 有对应环境变量就自动启用,没有就跳过(网站照常更新)
+  pushplus: true     # 环境变量 PUSHPLUS_TOKEN(微信,国内最方便)
+  serverchan: true   # 环境变量 SERVERCHAN_KEY(微信 Server酱)
+  bark: true         # 环境变量 BARK_URL(iOS)
+  telegram: true     # 环境变量 TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID
+  email: true        # 环境变量 SMTP_HOST/PORT/USER/PASS/TO
