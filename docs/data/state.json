@@ -1,4 +1,6 @@
 {
   "targets": {},
-  "fast_mode_until": null
+  "fast_mode_until": null,
+  "fetch_fail_streak": 0,
+  "fetch_cooldown_until": null
 }

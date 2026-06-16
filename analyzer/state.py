@@ -56,3 +56,24 @@ def dedup_alerts(state: dict, code: str, alerts: list[dict], now: dt.datetime, d
             fresh.append(al)
             seen[al["type"]] = now.isoformat()
     return fresh
+
+
+def in_cooldown(state: dict, now: dt.datetime) -> bool:
+    """是否处于取数冷却期(疑似被限频后退避)。"""
+    until = _parse(state.get("fetch_cooldown_until"))
+    return bool(until and now < until)
+
+
+def record_fetch_result(state: dict, ok: bool, now: dt.datetime, cfg: dict) -> str | None:
+    """记录本轮取数成败:连续失败达阈值则进入冷却;成功则清零。返回冷却截止时间(若有)。"""
+    res = cfg.get("resilience", {}) or {}
+    threshold = int(res.get("fail_threshold", 3))
+    cooldown = int(res.get("cooldown_minutes", 30))
+    if ok:
+        state["fetch_fail_streak"] = 0
+        state["fetch_cooldown_until"] = None
+        return None
+    state["fetch_fail_streak"] = int(state.get("fetch_fail_streak", 0)) + 1
+    if state["fetch_fail_streak"] >= threshold:
+        state["fetch_cooldown_until"] = (now + dt.timedelta(minutes=cooldown)).isoformat()
+    return state.get("fetch_cooldown_until")

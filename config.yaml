@@ -41,6 +41,10 @@ cadence:                # 自适应汇报节奏
   fast_mode_cooldown_minutes: 45 # 激增后保持高频多久
   alert_dedup_minutes: 15        # 同类告警去重窗口,防刷屏(建议 ≤ fast_interval)
 
+resilience:             # 失败熔断:疑似被限频时自动退避,别反复猛打被封的源
+  fail_threshold: 3       # 连续多少轮"全部取数失败"就进入冷却
+  cooldown_minutes: 30    # 冷却期内不再取数,沿用上次数据(stale 兜底),到点自动恢复
+
 notify:
   # 渠道开关说明:凭证放 环境变量 / GitHub Secrets,不写在这里
   # 有对应环境变量就自动启用,没有就跳过(网站照常更新)

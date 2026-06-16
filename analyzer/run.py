@@ -66,6 +66,10 @@ def main() -> None:
     state = statemod.load_state(state_path)
 
     market_open = args.force or args.demo or in_session(cfg, now)
+    # 失败熔断:疑似被限频时冷却退避,本轮不取数、沿用旧数据(--force/--demo 可强制绕过)
+    cooling = statemod.in_cooldown(state, now) and not args.force and not args.demo
+    if cooling:
+        print(f"[cooldown] 取数冷却中(疑似被限频),沿用上次数据,到 {state.get('fetch_cooldown_until')} 自动恢复")
     snapshot = {
         "updated_at": now.isoformat(timespec="seconds"),
         "market_open": market_open,
@@ -85,7 +89,7 @@ def main() -> None:
                 analysis_df = fetchmod.demo_minute(code, cfg["analysis"]["bar_period"], n=40)
                 intraday_df = fetchmod.demo_minute(code, "1", n=240)
                 daily_df = fetchmod.demo_daily(code)
-            elif market_open:
+            elif market_open and not cooling:
                 # 防封关键:一轮只打一次 1 分钟请求 —— 分时切片 + 重采样出分钟K分析,共用这份数据;
                 # 日K 当天只抓一次(缓存)。把每只票每轮请求数从 3 砍到约 1~2。
                 raw = fetchmod.fetch_1min(code)
@@ -129,6 +133,14 @@ def main() -> None:
         })
         if alerts:
             pending.append((target, metrics, alerts))
+
+    # ── 失败熔断:本轮真实取数全失败则计数,达阈值进入冷却 ──
+    if market_open and not cooling and not args.demo:
+        fresh_count = len(snapshot["targets"])  # 此时尚未 backfill,均为本轮新取
+        cd = statemod.record_fetch_result(state, fresh_count > 0, now, cfg)
+        if fresh_count == 0:
+            print(f"[fetch] 本轮全部失败 streak={state.get('fetch_fail_streak')}"
+                  + (f" → 冷却至 {cd}" if cd else ""))
 
     # ── 自适应节奏:斜率激增 → 高频 ──
     mode, interval = statemod.decide_cadence(state, cfg, any_surge, now)
