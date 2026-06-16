@@ -1,5 +1,7 @@
-// 看板:读取 data/data.json + data/alerts_history.json,渲染卡片与折线,60 秒自动刷新。
-const charts = {};
+// 看板:读取 data/data.json + data/alerts_history.json,渲染卡片(分时/日K 可切换),60 秒自动刷新。
+const charts = {};      // index -> echarts 实例
+const viewState = {};   // index -> 'intraday' | 'daily'
+let lastData = null;
 
 async function getJSON(url) {
   try {
@@ -10,25 +12,84 @@ async function getJSON(url) {
   }
 }
 
+function renderChart(i, view) {
+  const t = (lastData.targets || [])[i];
+  if (!t) return;
+  const el = document.getElementById(`chart-${i}`);
+  if (!el) return;
+  const chart = charts[i] || (charts[i] = echarts.init(el));
+  const up = (t.metrics?.pct_window || 0) >= 0;
+  const upColor = "#ff4d4f", downColor = "#18b89a";
+
+  if (view === "daily") {
+    const d = t.views?.daily || [];
+    chart.setOption({
+      grid: { left: 46, right: 12, top: 10, bottom: 22 },
+      xAxis: { type: "category", data: d.map(x => x.d), axisLabel: { fontSize: 10, color: "#8b97b0" } },
+      yAxis: { type: "value", scale: true, axisLabel: { fontSize: 10, color: "#8b97b0" } },
+      tooltip: { trigger: "axis" },
+      series: [{
+        type: "candlestick",
+        data: d.map(x => [x.o, x.c, x.l, x.h]),
+        itemStyle: { color: upColor, color0: downColor, borderColor: upColor, borderColor0: downColor },
+      }],
+    }, true);
+  } else {
+    const s = t.views?.intraday || [];
+    chart.setOption({
+      grid: { left: 46, right: 12, top: 10, bottom: 22 },
+      legend: { right: 8, top: 0, textStyle: { color: "#8b97b0", fontSize: 10 }, itemWidth: 14, itemHeight: 8 },
+      xAxis: { type: "category", data: s.map(x => x.t), axisLabel: { fontSize: 10, color: "#8b97b0" } },
+      yAxis: { type: "value", scale: true, axisLabel: { fontSize: 10, color: "#8b97b0" } },
+      tooltip: { trigger: "axis" },
+      series: [
+        {
+          name: "价格", type: "line", data: s.map(x => x.p), smooth: false, showSymbol: false,
+          lineStyle: { width: 1.6, color: up ? upColor : downColor },
+          areaStyle: { color: up ? "rgba(255,77,79,.08)" : "rgba(24,184,154,.08)" },
+        },
+        { name: "均价", type: "line", data: s.map(x => x.avg), smooth: false, showSymbol: false,
+          lineStyle: { width: 1, color: "#f5a623" } },
+      ],
+    }, true);
+  }
+}
+
+function switchView(i, view) {
+  viewState[i] = view;
+  document.querySelectorAll(`#card-${i} .view-toggle button`).forEach(b => {
+    b.classList.toggle("active", b.dataset.view === view);
+  });
+  renderChart(i, view);
+}
+
 function render(data, hist) {
+  lastData = data;
   const meta = document.getElementById("meta");
   if (!data) { meta.textContent = "暂无数据,等待第一次运行…"; return; }
 
   const modeTxt = data.mode === "fast" ? "⚡ 高频模式" : "🟢 正常模式";
   const openTxt = data.market_open ? "开盘中" : "休市";
-  meta.innerHTML =
-    `更新 ${data.updated_at} ｜ ${openTxt} ｜ ${modeTxt} ｜ 汇报间隔 ${data.next_interval_minutes ?? "-"} 分钟`;
+  const demoTag = data.demo ? '<span style="color:#f5a623;font-weight:600">⚠️ 演示数据 ｜ </span>' : "";
+  meta.innerHTML = demoTag + `更新 ${data.updated_at} ｜ ${openTxt} ｜ ${modeTxt} ｜ 汇报间隔 ${data.next_interval_minutes ?? "-"} 分钟`;
 
   const cards = document.getElementById("cards");
   cards.innerHTML = "";
   (data.targets || []).forEach((t, i) => {
     const m = t.metrics || {};
     const up = (m.pct_window || 0) >= 0;
+    const hasIntraday = (t.views?.intraday || []).length > 0;
+    const hasDaily = (t.views?.daily || []).length > 0;
+    // 默认视图:有分时用分时,否则日K
+    const def = viewState[i] || (hasIntraday ? "intraday" : "daily");
+    viewState[i] = def;
+
     const div = document.createElement("div");
     div.className = "card";
+    div.id = `card-${i}`;
     div.innerHTML = `
       <div class="card-head">
-        <span class="name">${t.name} <small>${t.code}</small></span>
+        <span class="name">${t.name} <small>${t.code}</small>${t.stale ? ' <small style="color:#f5a623">·旧</small>' : ""}</span>
         <span class="price ${up ? "up" : "down"}">${m.price ?? "-"}</span>
       </div>
       <div class="stats">
@@ -41,25 +102,18 @@ function render(data, hist) {
           ? t.alerts.map(a => `<span class="badge ${a.level}">${a.message}</span>`).join("")
           : '<span class="badge calm">无异动</span>'
       }</div>
+      <div class="view-toggle">
+        <button data-view="intraday" ${hasIntraday ? "" : "disabled"}>分时</button>
+        <button data-view="daily" ${hasDaily ? "" : "disabled"}>日K</button>
+      </div>
       <div class="chart" id="chart-${i}"></div>`;
     cards.appendChild(div);
 
-    const el = document.getElementById(`chart-${i}`);
-    const chart = charts[i] || (charts[i] = echarts.init(el));
-    const xs = (t.series || []).map(p => p.t);
-    const ys = (t.series || []).map(p => p.p);
-    const color = up ? "#ff4d4f" : "#18b89a";
-    chart.setOption({
-      grid: { left: 44, right: 12, top: 10, bottom: 22 },
-      xAxis: { type: "category", data: xs, axisLabel: { fontSize: 10, color: "#8b97b0" } },
-      yAxis: { type: "value", scale: true, axisLabel: { fontSize: 10, color: "#8b97b0" } },
-      tooltip: { trigger: "axis" },
-      series: [{
-        type: "line", data: ys, smooth: true, showSymbol: false,
-        lineStyle: { width: 2, color },
-        areaStyle: { color: up ? "rgba(255,77,79,.10)" : "rgba(24,184,154,.10)" },
-      }],
+    div.querySelectorAll(".view-toggle button").forEach(b => {
+      b.classList.toggle("active", b.dataset.view === def);
+      b.addEventListener("click", () => { if (!b.disabled) switchView(i, b.dataset.view); });
     });
+    renderChart(i, def);
   });
 
   const ul = document.getElementById("history");

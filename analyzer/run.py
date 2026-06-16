@@ -23,12 +23,6 @@ for _stream in (sys.stdout, sys.stderr):
     except Exception:
         pass
 
-# akshare 抓的是国内财经站点。若系统开了科学上网代理(Clash 等),请求会被代理
-# 拦截而连不上(报 ProxyError)。这里默认让本进程"直连不走代理"。
-# 若确需走代理,运行前把环境变量 NO_PROXY 设成具体域名即可覆盖此默认。
-os.environ.setdefault("NO_PROXY", "*")
-os.environ.setdefault("no_proxy", "*")
-
 from . import analyze as analyzemod
 from . import fetch as fetchmod
 from . import notify as notifymod
@@ -72,6 +66,7 @@ def main() -> None:
         "updated_at": now.isoformat(timespec="seconds"),
         "market_open": market_open,
         "mode": "normal",
+        "demo": args.demo,
         "targets": [],
     }
 
@@ -103,13 +98,37 @@ def main() -> None:
         if any(a["type"] == "slope_surge" for a in alerts):
             any_surge = True
 
-        series = [
-            {"t": str(r["time"])[11:16], "p": round(float(r["close"]), 3)}
-            for _, r in df.tail(60).iterrows()
-        ]
+        # ── 视图数据:分时(1分钟,含均价线)+ 日K(蜡烛)。best-effort,失败不影响主流程 ──
+        views = {"intraday": [], "daily": []}
+        try:
+            idf = fetchmod.demo_minute(code, "1", n=240) if args.demo else fetchmod.fetch_intraday(code)
+            if idf is not None and not idf.empty:
+                c = idf["close"].to_numpy(dtype=float)
+                v = idf["volume"].fillna(0).to_numpy(dtype=float) if "volume" in idf else None
+                if v is not None and v.sum() > 0:
+                    avg = ((c * v).cumsum() / v.cumsum().clip(min=1e-9))
+                else:
+                    avg = pd.Series(c).expanding().mean().to_numpy()
+                views["intraday"] = [
+                    {"t": str(t)[11:16], "p": round(float(p), 3), "avg": round(float(a), 3)}
+                    for t, p, a in zip(idf["time"], c, avg)
+                ]
+        except Exception as e:
+            print(f"[view-intraday] {code}: {e}")
+        try:
+            ddf = fetchmod.demo_daily(code) if args.demo else fetchmod.fetch_daily(code, 120)
+            if ddf is not None and not ddf.empty:
+                views["daily"] = [
+                    {"d": str(r["date"])[5:], "o": round(float(r["open"]), 3), "c": round(float(r["close"]), 3),
+                     "h": round(float(r["high"]), 3), "l": round(float(r["low"]), 3)}
+                    for _, r in ddf.iterrows()
+                ]
+        except Exception as e:
+            print(f"[view-daily] {code}: {e}")
+
         snapshot["targets"].append({
             "code": code, "name": target.get("name", code),
-            "metrics": metrics, "alerts": alerts, "series": series,
+            "metrics": metrics, "alerts": alerts, "views": views,
         })
         if alerts:
             pending.append((target, metrics, alerts))
@@ -144,22 +163,25 @@ def main() -> None:
     os.makedirs(DATA_DIR, exist_ok=True)
     out_path = os.path.join(DATA_DIR, "data.json")
 
-    # 加固:本轮没取到任何数据(如取数失败/被代理拦/GitHub 海外跑不通),
-    # 而上一次快照是有数据的 → 保留上一次,绝不用空数据覆盖好数据。
-    write_snapshot = True
-    if not snapshot["targets"] and os.path.exists(out_path):
+    # 加固:对本轮没取到的标的,沿用上一次的好数据(标记 stale),避免卡片消失、
+    # 或被部分失败的结果覆盖。海外 Actions 全失败时也能靠仓库里的旧数据兜底。
+    got = {t["code"] for t in snapshot["targets"]}
+    prev_targets = {}
+    if os.path.exists(out_path):
         try:
             with open(out_path, encoding="utf-8") as f:
-                prev = json.load(f)
-            if prev.get("targets"):
-                write_snapshot = False
-                print("[skip] 本轮未取到数据,保留上一次有效快照(不覆盖)")
+                prev_targets = {t["code"]: t for t in json.load(f).get("targets", [])}
         except Exception:
             pass
+    for target in cfg["targets"]:
+        code = target["code"]
+        if code not in got and code in prev_targets:
+            stale = dict(prev_targets[code])
+            stale["stale"] = True
+            snapshot["targets"].append(stale)
 
-    if write_snapshot:
-        with open(out_path, "w", encoding="utf-8") as f:
-            json.dump(snapshot, f, ensure_ascii=False, indent=2)
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(snapshot, f, ensure_ascii=False, indent=2)
 
     # ── 追加告警历史(最多保留 200 条)──
     hist_path = os.path.join(DATA_DIR, "alerts_history.json")
