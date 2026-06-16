@@ -4,15 +4,26 @@ akshare 是抓公开网页的非官方接口:有秒~分钟级延迟、会限频,
 """
 from __future__ import annotations
 
+import random
 import time
 
 import pandas as pd
 
+# 疑似"被限频/连接被掐"的异常特征(连接重置、读超时、429)。
+_RATELIMIT_HINTS = ("RemoteDisconnected", "Connection aborted", "ConnectionError",
+                    "Read timed out", "ReadTimeout", "429", "Max retries")
 
-def _retry(call, tries: int = 3, base_delay: float = 0.8):
-    """对网络抖动(系统代理/Clash 偶发断连)做重试,吸收偶发失败。
 
-    本机实测:行情走系统代理可达,直连反而被重置;故保持默认走系统代理 + 重试。
+def _is_ratelimit(err: Exception) -> bool:
+    s = f"{type(err).__name__}: {err}"
+    return any(h in s for h in _RATELIMIT_HINTS)
+
+
+def _retry(call, tries: int = 3, base_delay: float = 1.0):
+    """指数退避 + 抖动重试。撞到疑似限频信号时退避更久,避免把限流升级成封 IP。
+
+    本机实测:行情走系统代理可达,直连反而被重置;故默认走系统代理 + 重试。
+    注:'多少秒才安全'没有官方依据,这里只做温和退避,不当硬阈值。
     """
     last = None
     for i in range(tries):
@@ -21,8 +32,14 @@ def _retry(call, tries: int = 3, base_delay: float = 0.8):
         except Exception as e:
             last = e
             if i < tries - 1:
-                time.sleep(base_delay * (i + 1))
+                factor = 6.0 if _is_ratelimit(e) else 1.0  # 限频类退避更久(秒级)
+                time.sleep(base_delay * (2 ** i) * factor * random.uniform(0.8, 1.2))
     raise last
+
+
+def _polite_pause(lo: float = 0.8, hi: float = 1.8) -> None:
+    """每次真实外部请求前的随机间隔——把'恒定心跳'打散成正常用户画像,降低被封概率。"""
+    time.sleep(random.uniform(lo, hi))
 
 
 def _sina_symbol(code: str) -> str:
@@ -37,18 +54,15 @@ def _sina_symbol(code: str) -> str:
     return "sh" + code
 
 
-# akshare 中文列名 → 英文
-_CN_COLS = {
-    "时间": "time", "开盘": "open", "收盘": "close",
-    "最高": "high", "最低": "low", "成交量": "volume", "成交额": "amount",
-}
+def fetch_1min(code: str) -> pd.DataFrame:
+    """1 分钟K线(新浪源,约覆盖近 9 个交易日),time/open/close/high/low/volume。
 
-
-def fetch_minute(code: str, period: str = "15") -> pd.DataFrame:
-    """分钟K线(新浪源),返回 time/open/close/high/low/volume(按时间升序)。"""
+    一次请求即可同时支撑【当日分时切片】+【分钟K本地重采样分析】,避免重复打接口。
+    """
     import akshare as ak
 
-    df = _retry(lambda: ak.stock_zh_a_minute(symbol=_sina_symbol(code), period=str(period), adjust=""))
+    _polite_pause()
+    df = _retry(lambda: ak.stock_zh_a_minute(symbol=_sina_symbol(code), period="1", adjust=""))
     df = df.rename(columns={"day": "time"})
     df["time"] = pd.to_datetime(df["time"])
     for c in ["open", "close", "high", "low", "volume"]:
@@ -58,39 +72,30 @@ def fetch_minute(code: str, period: str = "15") -> pd.DataFrame:
     return df[keep].dropna(subset=["close"]).sort_values("time").reset_index(drop=True)
 
 
-def fetch_prev_close(code: str) -> float | None:
-    """昨收价,用于日内涨跌幅。取不到返回 None。"""
-    import akshare as ak
-
-    try:
-        spot = ak.stock_zh_a_spot_em()
-        row = spot.loc[spot["代码"] == code]
-        if not row.empty:
-            return float(row.iloc[0]["昨收"])
-    except Exception:
-        return None
-    return None
+def resample_bars(df: pd.DataFrame, minutes: int) -> pd.DataFrame:
+    """把 1 分钟K本地重采样成 N 分钟K(供分析用,省掉一次额外请求)。"""
+    if df is None or df.empty:
+        return df
+    r = (df.set_index("time")
+           .resample(f"{minutes}min")
+           .agg({"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"})
+           .dropna(subset=["close"]))
+    return r.reset_index()
 
 
-def fetch_intraday(code: str) -> pd.DataFrame:
-    """当日分时(1 分钟),返回 time/close/volume,只保留最新交易日。"""
-    import akshare as ak
-
-    df = _retry(lambda: ak.stock_zh_a_minute(symbol=_sina_symbol(code), period="1", adjust=""))
-    df = df.rename(columns={"day": "time"})
-    df["time"] = pd.to_datetime(df["time"])
-    for c in ["close", "volume"]:
-        if c in df.columns:
-            df[c] = pd.to_numeric(df[c], errors="coerce")
-    df = df.dropna(subset=["close"]).sort_values("time")
+def today_slice(df: pd.DataFrame) -> pd.DataFrame:
+    """取最新交易日的分钟数据(当日分时)。"""
+    if df is None or df.empty:
+        return df
     last_day = df["time"].dt.date.max()
     return df[df["time"].dt.date == last_day].reset_index(drop=True)
 
 
 def fetch_daily(code: str, days: int = 120) -> pd.DataFrame:
-    """日K(前复权),返回 date/open/close/high/low/volume 的最近 days 根。"""
+    """日K(前复权,新浪源),返回 date/open/close/high/low/volume 的最近 days 根。"""
     import akshare as ak
 
+    _polite_pause()
     df = _retry(lambda: ak.stock_zh_a_daily(symbol=_sina_symbol(code), adjust="qfq"))
     keep = [c for c in ["date", "open", "close", "high", "low", "volume"] if c in df.columns]
     df = df[keep].copy()
@@ -98,6 +103,33 @@ def fetch_daily(code: str, days: int = 120) -> pd.DataFrame:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
     return df.dropna(subset=["close"]).tail(days).reset_index(drop=True)
+
+
+def fetch_daily_cached(code: str, days: int, cache_dir: str, today: str) -> pd.DataFrame:
+    """日K 当天只抓一次:命中当天缓存直接读本地,否则抓一次并缓存。
+
+    日K 盘中不变,这样把日K请求量砍掉约 99%。缓存目录在 .gitignore 内(不入库)。
+    """
+    import json
+    import os
+
+    path = os.path.join(cache_dir, f"daily_{code}.json")
+    if os.path.exists(path):
+        try:
+            with open(path, encoding="utf-8") as f:
+                obj = json.load(f)
+            if obj.get("date") == today and obj.get("rows"):
+                return pd.DataFrame(obj["rows"])
+        except Exception:
+            pass
+    df = fetch_daily(code, days)
+    try:
+        os.makedirs(cache_dir, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"date": today, "rows": df.to_dict("records")}, f, ensure_ascii=False, default=str)
+    except Exception:
+        pass
+    return df
 
 
 def demo_daily(code: str, n: int = 120) -> pd.DataFrame:

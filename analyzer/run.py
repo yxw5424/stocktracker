@@ -14,6 +14,7 @@ import os
 import sys
 from zoneinfo import ZoneInfo
 
+import pandas as pd
 import yaml
 
 # Windows 控制台默认可能是 cp1252,打印中文会报错;统一切到 UTF-8。
@@ -30,6 +31,7 @@ from . import state as statemod
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(ROOT, "docs", "data")
+CACHE_DIR = os.path.join(ROOT, ".cache")  # 日K 等本地缓存(不入库)
 
 
 def load_cfg() -> dict:
@@ -38,6 +40,8 @@ def load_cfg() -> dict:
 
 
 def in_session(cfg: dict, now: dt.datetime) -> bool:
+    if now.weekday() >= 5:  # 周末不是交易日,直接不取数(法定节假日可后续补)
+        return False
     for start, end in cfg["market"]["sessions"]:
         sh, sm = map(int, start.split(":"))
         eh, em = map(int, end.split(":"))
@@ -75,56 +79,49 @@ def main() -> None:
 
     for target in cfg["targets"]:
         code = target["code"]
+        analysis_df = intraday_df = daily_df = None
         try:
             if args.demo:
-                df = fetchmod.demo_minute(code, cfg["analysis"]["bar_period"])
-                prev_close = float(df["close"].iloc[0])
-            elif not market_open:
-                df, prev_close = None, None  # 休市不取数
-            else:
-                df = fetchmod.fetch_minute(code, cfg["analysis"]["bar_period"])
-                # 昨收价仅用于日内涨跌幅(看板未展示),而取它要下载全市场表、又慢又易失败,
-                # 故默认跳过;核心的"区间涨跌幅/斜率"用分钟K线即可算。
-                prev_close = None
+                analysis_df = fetchmod.demo_minute(code, cfg["analysis"]["bar_period"], n=40)
+                intraday_df = fetchmod.demo_minute(code, "1", n=240)
+                daily_df = fetchmod.demo_daily(code)
+            elif market_open:
+                # 防封关键:一轮只打一次 1 分钟请求 —— 分时切片 + 重采样出分钟K分析,共用这份数据;
+                # 日K 当天只抓一次(缓存)。把每只票每轮请求数从 3 砍到约 1~2。
+                raw = fetchmod.fetch_1min(code)
+                analysis_df = fetchmod.resample_bars(raw, int(cfg["analysis"]["bar_period"]))
+                intraday_df = fetchmod.today_slice(raw)
+                daily_df = fetchmod.fetch_daily_cached(code, 120, CACHE_DIR, str(now.date()))
         except Exception as e:
             print(f"[fetch] {code} failed: {e}")
-            df, prev_close = None, None
 
-        if df is None or df.empty:
+        if analysis_df is None or analysis_df.empty:
             continue
 
-        metrics = analyzemod.analyze(df, cfg, prev_close)
+        metrics = analyzemod.analyze(analysis_df, cfg, None)
         alerts = analyzemod.evaluate_triggers(metrics, target, cfg)
         if any(a["type"] == "slope_surge" for a in alerts):
             any_surge = True
 
-        # ── 视图数据:分时(1分钟,含均价线)+ 日K(蜡烛)。best-effort,失败不影响主流程 ──
+        # ── 视图:分时(含均价线)+ 日K(蜡烛) ──
         views = {"intraday": [], "daily": []}
-        try:
-            idf = fetchmod.demo_minute(code, "1", n=240) if args.demo else fetchmod.fetch_intraday(code)
-            if idf is not None and not idf.empty:
-                c = idf["close"].to_numpy(dtype=float)
-                v = idf["volume"].fillna(0).to_numpy(dtype=float) if "volume" in idf else None
-                if v is not None and v.sum() > 0:
-                    avg = ((c * v).cumsum() / v.cumsum().clip(min=1e-9))
-                else:
-                    avg = pd.Series(c).expanding().mean().to_numpy()
-                views["intraday"] = [
-                    {"t": str(t)[11:16], "p": round(float(p), 3), "avg": round(float(a), 3)}
-                    for t, p, a in zip(idf["time"], c, avg)
-                ]
-        except Exception as e:
-            print(f"[view-intraday] {code}: {e}")
-        try:
-            ddf = fetchmod.demo_daily(code) if args.demo else fetchmod.fetch_daily(code, 120)
-            if ddf is not None and not ddf.empty:
-                views["daily"] = [
-                    {"d": str(r["date"])[5:], "o": round(float(r["open"]), 3), "c": round(float(r["close"]), 3),
-                     "h": round(float(r["high"]), 3), "l": round(float(r["low"]), 3)}
-                    for _, r in ddf.iterrows()
-                ]
-        except Exception as e:
-            print(f"[view-daily] {code}: {e}")
+        if intraday_df is not None and not intraday_df.empty:
+            c = intraday_df["close"].to_numpy(dtype=float)
+            v = intraday_df["volume"].fillna(0).to_numpy(dtype=float) if "volume" in intraday_df else None
+            if v is not None and v.sum() > 0:
+                avg = (c * v).cumsum() / v.cumsum().clip(min=1e-9)
+            else:
+                avg = pd.Series(c).expanding().mean().to_numpy()
+            views["intraday"] = [
+                {"t": str(t)[11:16], "p": round(float(p), 3), "avg": round(float(a), 3)}
+                for t, p, a in zip(intraday_df["time"], c, avg)
+            ]
+        if daily_df is not None and not daily_df.empty:
+            views["daily"] = [
+                {"d": str(r["date"])[5:], "o": round(float(r["open"]), 3), "c": round(float(r["close"]), 3),
+                 "h": round(float(r["high"]), 3), "l": round(float(r["low"]), 3)}
+                for _, r in daily_df.iterrows()
+            ]
 
         snapshot["targets"].append({
             "code": code, "name": target.get("name", code),

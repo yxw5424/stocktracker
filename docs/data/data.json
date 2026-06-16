@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-06-16T12:18:44",
+  "updated_at": "2026-06-16T12:54:10",
   "market_open": true,
   "mode": "normal",
   "demo": false,
@@ -9,22 +9,16 @@
       "name": "华安证券",
       "metrics": {
         "price": 8.32,
-        "pct_window": 3.23,
+        "pct_window": 0.0,
         "pct_window_minutes": 60,
         "pct_day": null,
-        "slope": 3.12,
-        "slope_prev": 0.14,
-        "accel": 2.98,
-        "vol_ratio": 0.3,
+        "slope": 2.59,
+        "slope_prev": 3.1,
+        "accel": -0.52,
+        "vol_ratio": 0.02,
         "bar_time": "2026-06-16 11:30:00"
       },
-      "alerts": [
-        {
-          "type": "pct_change",
-          "level": "normal",
-          "message": "60分钟上涨 +3.23%(阈值±3.0%)"
-        }
-      ],
+      "alerts": [],
       "views": {
         "intraday": [
           {
@@ -1477,13 +1471,13 @@
       "name": "北特科技",
       "metrics": {
         "price": 43.59,
-        "pct_window": -0.39,
+        "pct_window": -1.85,
         "pct_window_minutes": 60,
         "pct_day": null,
-        "slope": 1.78,
-        "slope_prev": 0.05,
-        "accel": 1.73,
-        "vol_ratio": 0.31,
+        "slope": 0.62,
+        "slope_prev": 1.97,
+        "accel": -1.35,
+        "vol_ratio": 0.01,
         "bar_time": "2026-06-16 11:30:00"
       },
       "alerts": [],
