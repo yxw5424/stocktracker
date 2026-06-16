@@ -25,6 +25,18 @@ def _retry(call, tries: int = 3, base_delay: float = 0.8):
     raise last
 
 
+def _sina_symbol(code: str) -> str:
+    """6 位代码 → 新浪/腾讯前缀格式:沪 sh / 深 sz / 北 bj。"""
+    code = str(code).strip()
+    if code.startswith("6"):
+        return "sh" + code
+    if code.startswith(("0", "3")):
+        return "sz" + code
+    if code.startswith(("4", "8", "9")):
+        return "bj" + code
+    return "sh" + code
+
+
 # akshare 中文列名 → 英文
 _CN_COLS = {
     "时间": "time", "开盘": "open", "收盘": "close",
@@ -33,18 +45,17 @@ _CN_COLS = {
 
 
 def fetch_minute(code: str, period: str = "15") -> pd.DataFrame:
-    """返回列: time, open, close, high, low, volume(按时间升序)。"""
+    """分钟K线(新浪源),返回 time/open/close/high/low/volume(按时间升序)。"""
     import akshare as ak
 
-    df = _retry(lambda: ak.stock_zh_a_hist_min_em(symbol=code, period=str(period), adjust=""))
-    df = df.rename(columns=_CN_COLS)
-    keep = [c for c in ["time", "open", "close", "high", "low", "volume"] if c in df.columns]
-    df = df[keep].copy()
+    df = _retry(lambda: ak.stock_zh_a_minute(symbol=_sina_symbol(code), period=str(period), adjust=""))
+    df = df.rename(columns={"day": "time"})
     df["time"] = pd.to_datetime(df["time"])
     for c in ["open", "close", "high", "low", "volume"]:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
-    return df.dropna(subset=["close"]).sort_values("time").reset_index(drop=True)
+    keep = [c for c in ["time", "open", "close", "high", "low", "volume"] if c in df.columns]
+    return df[keep].dropna(subset=["close"]).sort_values("time").reset_index(drop=True)
 
 
 def fetch_prev_close(code: str) -> float | None:
@@ -65,8 +76,8 @@ def fetch_intraday(code: str) -> pd.DataFrame:
     """当日分时(1 分钟),返回 time/close/volume,只保留最新交易日。"""
     import akshare as ak
 
-    df = _retry(lambda: ak.stock_zh_a_hist_min_em(symbol=code, period="1", adjust=""))
-    df = df.rename(columns=_CN_COLS)
+    df = _retry(lambda: ak.stock_zh_a_minute(symbol=_sina_symbol(code), period="1", adjust=""))
+    df = df.rename(columns={"day": "time"})
     df["time"] = pd.to_datetime(df["time"])
     for c in ["close", "volume"]:
         if c in df.columns:
@@ -80,10 +91,7 @@ def fetch_daily(code: str, days: int = 120) -> pd.DataFrame:
     """日K(前复权),返回 date/open/close/high/low/volume 的最近 days 根。"""
     import akshare as ak
 
-    df = _retry(lambda: ak.stock_zh_a_hist(symbol=code, period="daily",
-                                           start_date="19900101", end_date="20500101", adjust="qfq"))
-    df = df.rename(columns={"日期": "date", "开盘": "open", "收盘": "close",
-                            "最高": "high", "最低": "low", "成交量": "volume"})
+    df = _retry(lambda: ak.stock_zh_a_daily(symbol=_sina_symbol(code), adjust="qfq"))
     keep = [c for c in ["date", "open", "close", "high", "low", "volume"] if c in df.columns]
     df = df[keep].copy()
     for c in ["open", "close", "high", "low", "volume"]:
