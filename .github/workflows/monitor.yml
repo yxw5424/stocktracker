@@ -1,12 +1,14 @@
 name: stock-monitor
 
 on:
-  schedule:
-    # cron 为 UTC 时间。A股 09:30–15:00(UTC+8)= 01:30–07:00 UTC,周一至周五。
-    # 每 15 分钟跑一次;脚本内部再按"自适应节奏"决定是否真正推送告警。
-    # 注意:GitHub Actions 定时是尽力而为,可能延迟几分钟;仓库 60 天无活动会自动暂停。
-    - cron: "*/15 1-7 * * 1-5"
-  workflow_dispatch: {}   # 允许在 Actions 页面手动触发
+  # ⚠️ 定时已停用:GitHub 的服务器在海外,akshare 抓不到国内行情(targets 会是空的)。
+  # 数据请在【国内本地】用 `python scripts/run_local.py` 抓取并自动 push,GitHub 只托管网站。
+  # 若将来你用"国内的 self-hosted runner / VPS",再取消下面 schedule 的注释即可恢复云端定时。
+  #
+  # schedule:
+  #   # cron 为 UTC。A股 09:30–15:00(UTC+8)= 01:30–07:00 UTC,周一至周五,每 15 分钟。
+  #   - cron: "*/15 1-7 * * 1-5"
+  workflow_dispatch: {}   # 仅保留手动触发
 
 permissions:
   contents: write          # 需要把更新后的 docs/data 提交回仓库

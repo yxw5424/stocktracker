@@ -23,6 +23,12 @@ for _stream in (sys.stdout, sys.stderr):
     except Exception:
         pass
 
+# akshare 抓的是国内财经站点。若系统开了科学上网代理(Clash 等),请求会被代理
+# 拦截而连不上(报 ProxyError)。这里默认让本进程"直连不走代理"。
+# 若确需走代理,运行前把环境变量 NO_PROXY 设成具体域名即可覆盖此默认。
+os.environ.setdefault("NO_PROXY", "*")
+os.environ.setdefault("no_proxy", "*")
+
 from . import analyze as analyzemod
 from . import fetch as fetchmod
 from . import notify as notifymod
@@ -82,7 +88,9 @@ def main() -> None:
                 df, prev_close = None, None  # 休市不取数
             else:
                 df = fetchmod.fetch_minute(code, cfg["analysis"]["bar_period"])
-                prev_close = fetchmod.fetch_prev_close(code)
+                # 昨收价仅用于日内涨跌幅(看板未展示),而取它要下载全市场表、又慢又易失败,
+                # 故默认跳过;核心的"区间涨跌幅/斜率"用分钟K线即可算。
+                prev_close = None
         except Exception as e:
             print(f"[fetch] {code} failed: {e}")
             df, prev_close = None, None
@@ -134,8 +142,24 @@ def main() -> None:
 
     # ── 写快照 ──
     os.makedirs(DATA_DIR, exist_ok=True)
-    with open(os.path.join(DATA_DIR, "data.json"), "w", encoding="utf-8") as f:
-        json.dump(snapshot, f, ensure_ascii=False, indent=2)
+    out_path = os.path.join(DATA_DIR, "data.json")
+
+    # 加固:本轮没取到任何数据(如取数失败/被代理拦/GitHub 海外跑不通),
+    # 而上一次快照是有数据的 → 保留上一次,绝不用空数据覆盖好数据。
+    write_snapshot = True
+    if not snapshot["targets"] and os.path.exists(out_path):
+        try:
+            with open(out_path, encoding="utf-8") as f:
+                prev = json.load(f)
+            if prev.get("targets"):
+                write_snapshot = False
+                print("[skip] 本轮未取到数据,保留上一次有效快照(不覆盖)")
+        except Exception:
+            pass
+
+    if write_snapshot:
+        with open(out_path, "w", encoding="utf-8") as f:
+            json.dump(snapshot, f, ensure_ascii=False, indent=2)
 
     # ── 追加告警历史(最多保留 200 条)──
     hist_path = os.path.join(DATA_DIR, "alerts_history.json")
