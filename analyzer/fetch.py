@@ -111,12 +111,16 @@ def today_slice(df: pd.DataFrame) -> pd.DataFrame:
     return df[df["time"].dt.date == last_day].reset_index(drop=True)
 
 
-def fetch_daily(code: str, days: int = 120) -> pd.DataFrame:
-    """日K(前复权,新浪源),返回 date/open/close/high/low/volume 的最近 days 根。"""
+def fetch_daily(code: str, days: int = 120, adjust: str = "qfq") -> pd.DataFrame:
+    """日K(新浪源),返回 date/open/close/high/low/volume 的最近 days 根。
+
+    adjust: 看板展示用 'qfq'(前复权);**回测必须用 'hfq'(后复权)**——前复权会随新
+    除权事件改写历史价,构成 look-ahead 泄漏(后复权不会改历史,回测才干净)。
+    """
     import akshare as ak
 
     _polite_pause()
-    df = _retry(lambda: ak.stock_zh_a_daily(symbol=_sina_symbol(code), adjust="qfq"))
+    df = _retry(lambda: ak.stock_zh_a_daily(symbol=_sina_symbol(code), adjust=adjust))
     keep = [c for c in ["date", "open", "close", "high", "low", "volume"] if c in df.columns]
     df = df[keep].copy()
     for c in ["open", "close", "high", "low", "volume"]:
