@@ -188,7 +188,9 @@ def main() -> None:
     if os.path.exists(out_path):
         try:
             with open(out_path, encoding="utf-8") as f:
-                prev_targets = {t["code"]: t for t in json.load(f).get("targets", [])}
+                prev = json.load(f)
+            if not prev.get("demo"):   # 绝不拿 demo 数据当"旧真实数据"兜底
+                prev_targets = {t["code"]: t for t in prev.get("targets", [])}
         except Exception:
             pass
     for target in cfg["targets"]:
