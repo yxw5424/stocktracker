@@ -179,6 +179,49 @@ async function loadNotify() {
     ul.appendChild(li);
   });
 }
+// ───────── 卡片一键回测(全策略柱状图) ─────────
+async function cardBacktest(code, name) {
+  toast(`回测 ${name || code} 全策略中…`);
+  try {
+    const r = await api("/backtest_all", { method: "POST", body: JSON.stringify({ code }) });
+    if (r.error) { toast(r.error, false); return; }
+    openBtModal(name || code, r);
+  } catch (e) { toast("回测失败:" + e.message, false); }
+}
+
+function openBtModal(title, r) {
+  const old = document.getElementById("bt-modal");
+  if (old) old.remove();
+  const ov = document.createElement("div");
+  ov.id = "bt-modal";
+  ov.innerHTML = `<div class="bt-modal-box">
+      <div class="bt-modal-head"><span>${title} · 全策略回测 · 10日平均收益(后复权·T+1·扣成本)</span>
+        <button id="bt-modal-x" class="btn">关闭</button></div>
+      <div id="bt-modal-chart" style="width:100%;height:340px"></div>
+      <div class="hint">灰柱=样本&lt;100不可信(单票样本普遍偏少,可信度看横截面体检表);历史≠未来;非投资建议。</div>
+    </div>`;
+  document.body.appendChild(ov);
+  document.getElementById("bt-modal-x").onclick = () => ov.remove();
+  ov.onclick = (e) => { if (e.target === ov) ov.remove(); };
+
+  const data = Object.values(r.signals).map(s => {
+    const h = s.horizons["10d"] || {};
+    return { name: s.desc, avg: h.avg, n: h.n, win: h.win_rate, reliable: h.reliable };
+  }).filter(d => d.avg != null).sort((a, b) => b.avg - a.avg);
+
+  const chart = echarts.init(document.getElementById("bt-modal-chart"));
+  chart.setOption({
+    grid: { left: 50, right: 16, top: 14, bottom: 110 },
+    xAxis: { type: "category", data: data.map(d => d.name),
+             axisLabel: { interval: 0, rotate: 32, fontSize: 10, color: "#8b97b0" } },
+    yAxis: { type: "value", name: "10日均值%", axisLabel: { color: "#8b97b0" } },
+    tooltip: { trigger: "axis", formatter: p => { const d = data[p[0].dataIndex];
+      return `${d.name}<br/>10日均值 ${d.avg}%<br/>胜率 ${d.win}%<br/>样本 ${d.n}${d.reliable ? "" : " (不可信)"}`; } },
+    series: [{ type: "bar", data: data.map(d => ({ value: d.avg,
+      itemStyle: { color: !d.reliable ? "#50607f" : (d.avg >= 0 ? "#18b89a" : "#ff4d4f") } })) }],
+  });
+}
+
 // ───────── 一键回测 ─────────
 async function loadBtSignals() {
   try {
@@ -217,6 +260,11 @@ async function testNotify() {
 
 // ───────── 启动 ─────────
 function mountConsole() {
+  document.body.classList.add("local");   // 显示卡片上的"回测"按钮(Pages 上隐藏)
+  document.getElementById("cards").addEventListener("click", (e) => {
+    const b = e.target.closest(".card-bt");
+    if (b) cardBacktest(b.dataset.code, b.dataset.name);   // 委托:卡片重建也不失效
+  });
   document.getElementById("nav").hidden = false;
   document.querySelectorAll("#nav button").forEach(b => b.addEventListener("click", () => switchTab(b.dataset.view)));
   document.getElementById("wl-add").addEventListener("click", addWatch);

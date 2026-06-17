@@ -189,6 +189,14 @@ def run_backtest(req: BacktestReq):
     return btmod.backtest(code, req.signal, days=req.days)
 
 
+@app.post("/api/backtest_all")
+def run_backtest_all(payload: dict):
+    code = str(payload.get("code", "")).strip()
+    if not (code.isdigit() and len(code) == 6):
+        raise HTTPException(400, "代码须为 6 位数字")
+    return btmod.backtest_all(code)
+
+
 class RuleModel(BaseModel):
     id: str = ""
     name: str

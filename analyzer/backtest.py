@@ -169,6 +169,29 @@ def backtest(code: str, signal: str = "big_up_volume",
     }
 
 
+def backtest_all(code: str, horizons=(1, 3, 5, 10), days: int = 800, cost_pct: float = 0.2) -> dict:
+    """对一只票一次性回测所有信号(共用一次后复权日线抓取)。供"卡片一键回测"用。"""
+    df = fetchmod.fetch_daily(code, days, adjust="hfq").reset_index(drop=True)
+    if df.empty or len(df) < 60:
+        return {"code": code, "error": "历史数据不足"}
+    close = df["close"].to_numpy(dtype=float)
+    n_bars = len(df)
+    cost = cost_pct / 100.0
+    out = {"code": code, "sample_days": n_bars, "signals": {}}
+    for sig, (fn, desc) in SIGNALS.items():
+        mask = fn(df).fillna(False).to_numpy()
+        idx = [i for i in range(n_bars - 1) if mask[i]]
+        per_h = {}
+        for h in horizons:
+            rets = [(close[i + 1 + h] / close[i + 1] - 1 - cost) * 100 for i in idx if i + 1 + h < n_bars]
+            s = _stats(rets)
+            if s:
+                per_h[f"{h}d"] = {"n": s["n"], "win_rate": s["win_rate"],
+                                  "avg": s["avg"], "reliable": s["reliable"]}
+        out["signals"][sig] = {"desc": desc, "horizons": per_h}
+    return out
+
+
 def main() -> None:
     import argparse
     import json

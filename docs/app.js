@@ -111,6 +111,7 @@ function render(data, hist) {
       <div class="view-toggle">
         <button data-view="intraday" ${hasIntraday ? "" : "disabled"}>分时</button>
         <button data-view="daily" ${hasDaily ? "" : "disabled"}>日K</button>
+        <button class="card-bt" data-code="${t.code}" data-name="${t.name}">📊 回测全策略</button>
       </div>
       <div class="chart" id="chart-${i}"></div>`;
     cards.appendChild(div);
