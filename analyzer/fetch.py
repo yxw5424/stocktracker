@@ -9,6 +9,26 @@ import time
 
 import pandas as pd
 
+
+def _force_direct() -> None:
+    """国内数据源(新浪/腾讯)直连即可,绕过系统代理(Clash)。
+
+    这样抓数据【不再依赖科学上网】:Clash 没开/挂了也能抓。
+    (东财对直连不通,但我们已不用东财;若代理在 TUN 透明模式下仍可能被截,极少见。)
+    """
+    import os
+    os.environ["NO_PROXY"] = "*"
+    os.environ["no_proxy"] = "*"
+    for _mod in ("requests.utils", "urllib.request"):
+        try:
+            import importlib
+            importlib.import_module(_mod).getproxies = lambda *a, **k: {}
+        except Exception:
+            pass
+
+
+_force_direct()
+
 # 疑似"被限频/连接被掐"的异常特征(连接重置、读超时、429)。
 _RATELIMIT_HINTS = ("RemoteDisconnected", "Connection aborted", "ConnectionError",
                     "Read timed out", "ReadTimeout", "429", "Max retries")
