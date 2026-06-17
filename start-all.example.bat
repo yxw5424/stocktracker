@@ -14,7 +14,8 @@ set STK_SECRET=paste-random-hex-here
 
 start "stk-data"    cmd /k "chcp 65001>nul & python scripts\run_local.py"
 start "stk-console" cmd /k "chcp 65001>nul & python -m server.app"
-start "stk-tunnel"  cmd /k "chcp 65001>nul & cloudflared tunnel --url http://127.0.0.1:8777"
+REM tunnel: cpolar (CN intranet-penetration, no VPN). First time only: cpolar authtoken YOUR_TOKEN
+start "stk-tunnel"  cmd /k "chcp 65001>nul & cpolar http 8777"
 
-echo Local console: http://127.0.0.1:8777   Share link: see the "stk-tunnel" window.
+echo Local console: http://127.0.0.1:8777   Share link: stk-tunnel window or http://127.0.0.1:9200
 pause
