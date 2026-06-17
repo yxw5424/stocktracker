@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-06-17T11:13:44",
+  "updated_at": "2026-06-17T11:16:47",
   "market_open": true,
   "mode": "normal",
   "demo": false,
@@ -9,14 +9,14 @@
       "name": "华安证券",
       "metrics": {
         "price": 8.72,
-        "pct_window": -1.8,
+        "pct_window": -0.8,
         "pct_window_minutes": 60,
         "pct_day": null,
-        "slope": 0.24,
-        "slope_prev": 0.25,
-        "accel": -0.01,
-        "vol_ratio": 0.45,
-        "bar_time": "2026-06-17 11:00:00"
+        "slope": -1.08,
+        "slope_prev": 0.24,
+        "accel": -1.32,
+        "vol_ratio": 0.06,
+        "bar_time": "2026-06-17 11:15:00"
       },
       "alerts": [],
       "views": {
@@ -538,6 +538,21 @@
           },
           {
             "t": "11:14",
+            "p": 8.72,
+            "avg": 8.783
+          },
+          {
+            "t": "11:15",
+            "p": 8.72,
+            "avg": 8.783
+          },
+          {
+            "t": "11:16",
+            "p": 8.72,
+            "avg": 8.783
+          },
+          {
+            "t": "11:17",
             "p": 8.72,
             "avg": 8.783
           }
@@ -1390,15 +1405,15 @@
       "code": "603009",
       "name": "北特科技",
       "metrics": {
-        "price": 42.78,
-        "pct_window": -0.83,
+        "price": 42.73,
+        "pct_window": -0.58,
         "pct_window_minutes": 60,
         "pct_day": null,
-        "slope": -0.07,
+        "slope": -0.61,
         "slope_prev": -0.07,
-        "accel": -0.0,
-        "vol_ratio": 0.39,
-        "bar_time": "2026-06-17 11:00:00"
+        "accel": -0.54,
+        "vol_ratio": 0.09,
+        "bar_time": "2026-06-17 11:15:00"
       },
       "alerts": [],
       "views": {
@@ -1920,8 +1935,23 @@
           },
           {
             "t": "11:14",
-            "p": 42.78,
+            "p": 42.79,
             "avg": 42.864
+          },
+          {
+            "t": "11:15",
+            "p": 42.76,
+            "avg": 42.863
+          },
+          {
+            "t": "11:16",
+            "p": 42.75,
+            "avg": 42.863
+          },
+          {
+            "t": "11:17",
+            "p": 42.73,
+            "avg": 42.862
           }
         ],
         "daily": [
