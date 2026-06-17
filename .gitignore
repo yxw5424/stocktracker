@@ -7,3 +7,4 @@ venv/
 .claude/
 .cache/
 *.bak
+start-all.bat
