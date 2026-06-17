@@ -20,12 +20,13 @@
 
 本仓库根目录即一个 Claude Code 插件(`.claude-plugin/plugin.json` + `commands/` + `skills/`),并自带插件市场清单(`.claude-plugin/marketplace.json`)。
 
-在 Claude Code 里:
+在 Claude Code 里把本仓库添加为插件市场并安装:
 ```
 /plugin marketplace add yxw5424/stocktracker
-/plugin install stocktracker@stocktracker
 ```
-然后重启 Claude Code,命令即生效。
+然后在弹出的 `/plugin` 菜单里选 **stocktracker** 安装(或 `/plugin install stocktracker@stocktracker`)。装好后重启 Claude Code,命令即生效。
+
+> 也可不走市场,直接本地开发加载:在项目目录用 `--plugin-dir .` 或把本目录加入 Claude Code 的本地插件路径。
 
 > 前提:
 > - 在**本项目目录**启动 Claude Code(命令里的 `python -m analyzer.*` 依赖项目环境)。
