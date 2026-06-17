@@ -35,10 +35,17 @@ def _sig_above_ma(df: pd.DataFrame, n: int = 20) -> pd.Series:
     return (df["close"] > ma) & (df["close"].shift(1) <= ma.shift(1))  # 上穿
 
 
+def _sig_reversal(df: pd.DataFrame, n: int = 5, drop: float = 8.0) -> pd.Series:
+    """短期反转候选:近 n 日累计跌幅 ≥ drop%(buy-the-dip)。验证 A股'反转>动量'。"""
+    cum = df["close"].pct_change(n) * 100
+    return cum <= -drop
+
+
 SIGNALS = {
-    "big_up_volume": (_sig_big_up_volume, "放量大涨(涨幅≥5% 且量≥2倍20日均量)"),
+    "big_up_volume": (_sig_big_up_volume, "放量大涨(涨幅≥5% 且量≥2倍20日均量)= 追涨"),
     "breakout_20d": (_sig_breakout, "突破20日新高"),
     "cross_ma20": (_sig_above_ma, "上穿20日均线"),
+    "reversal_5d": (_sig_reversal, "短期反转(近5日跌≥8%)= 抄反转"),
 }
 
 
