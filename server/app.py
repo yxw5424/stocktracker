@@ -144,6 +144,25 @@ def del_watchlist(code: str):
     return {"ok": True}
 
 
+@app.post("/api/refresh")
+def refresh_board():
+    """抓一次最新数据(analyzer.run --force),让首页看板立刻反映当前自选。约 10-30 秒。"""
+    import json as _json
+    import subprocess
+
+    try:
+        subprocess.run([sys.executable, "-m", "analyzer.run", "--force"],
+                       cwd=ROOT, capture_output=True, text=True, timeout=300)
+    except Exception as e:
+        raise HTTPException(500, f"刷新失败: {e}")
+    try:
+        with open(os.path.join(ROOT, "docs", "data", "data.json"), encoding="utf-8") as f:
+            n = len(_json.load(f).get("targets", []))
+    except Exception:
+        n = 0
+    return {"ok": True, "n": n}
+
+
 # ──────────────── 规则 ────────────────
 from analyzer import backtest as btmod  # noqa: E402
 from analyzer import rules as rulesmod  # noqa: E402

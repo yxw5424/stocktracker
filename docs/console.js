@@ -60,6 +60,16 @@ async function delWatch(code) {
   try { await api("/watchlist/" + code, { method: "DELETE" }); toast("已移除 " + code); loadWatchlist(); }
   catch (e) { toast("移除失败:" + e.message, false); }
 }
+async function refreshBoard() {
+  const btn = document.getElementById("wl-refresh");
+  const old = btn.textContent;
+  btn.disabled = true; btn.textContent = "刷新中…(约20秒)";
+  try {
+    const r = await api("/refresh", { method: "POST" });
+    toast(`已刷新,看板 ${r.n} 只 —— 去首页 Ctrl+F5`);
+  } catch (e) { toast("刷新失败:" + e.message, false); }
+  finally { btn.disabled = false; btn.textContent = old; }
+}
 
 // ───────── 规则制定器(NL → chips → 保存) ─────────
 let draft = null;
@@ -210,6 +220,7 @@ function mountConsole() {
   document.getElementById("nav").hidden = false;
   document.querySelectorAll("#nav button").forEach(b => b.addEventListener("click", () => switchTab(b.dataset.view)));
   document.getElementById("wl-add").addEventListener("click", addWatch);
+  document.getElementById("wl-refresh").addEventListener("click", refreshBoard);
   document.getElementById("rule-parse").addEventListener("click", parseRule);
   document.getElementById("bt-run").addEventListener("click", runBacktest);
   document.getElementById("notify-test").addEventListener("click", testNotify);

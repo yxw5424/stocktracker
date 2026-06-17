@@ -3,11 +3,23 @@
 # ───────────────────────────────────────────────────────────────
 
 targets:
-  - code: "600909"
-    name: "华安证券"
-    levels: []          # 关键价位线(突破告警),如 [7.0, 8.16];留空则不判突破
   - code: "603009"
     name: "北特科技"
+    levels: []
+  - code: '300394'
+    name: 天孚通信
+    levels: []
+  - code: '300308'
+    name: 中际旭创
+    levels: []
+  - code: '601138'
+    name: 工业富联
+    levels: []
+  - code: '688017'
+    name: 绿的谐波
+    levels: []
+  - code: '300285'
+    name: 国瓷材料
     levels: []
 market:
   timezone: "Asia/Shanghai"

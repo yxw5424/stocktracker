@@ -13,9 +13,16 @@
         "slope_surge": "2026-06-17T19:01:09.520584"
       },
       "last_report": "2026-06-17T19:01:09.520584"
+    },
+    "300285": {
+      "last_alert_by_type": {
+        "pct_change": "2026-06-17T22:51:10.177947",
+        "slope_surge": "2026-06-17T22:51:10.177947"
+      },
+      "last_report": "2026-06-17T22:51:10.177947"
     }
   },
-  "fast_mode_until": "2026-06-17T19:46:09.520584",
+  "fast_mode_until": "2026-06-17T23:36:10.177947",
   "fetch_fail_streak": 0,
   "fetch_cooldown_until": null
 }
