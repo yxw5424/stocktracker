@@ -39,6 +39,10 @@ class DataProvider:
     def daily(self, code: str, days: int = 120) -> pd.DataFrame:
         raise NotImplementedError
 
+    def sectors(self) -> pd.DataFrame:
+        """行业板块快照:sector/count/pct/amount。"""
+        raise NotImplementedError
+
 
 _IDX_REN = {"代码": "code", "名称": "name", "最新价": "price", "涨跌幅": "pct",
             "昨收": "prev_close", "今开": "open", "最高": "high", "最低": "low",
@@ -68,6 +72,19 @@ class SinaProvider(DataProvider):
 
     def daily(self, code: str, days: int = 120) -> pd.DataFrame:
         return fetchmod.fetch_daily(code, days)
+
+    def sectors(self) -> pd.DataFrame:
+        import akshare as ak
+
+        fetchmod._polite_pause()
+        df = fetchmod._retry(lambda: ak.stock_sector_spot(indicator="新浪行业"))
+        df = df.rename(columns={"板块": "sector", "公司家数": "count",
+                                "涨跌幅": "pct", "总成交额": "amount"})
+        for c in ["pct", "amount", "count"]:
+            if c in df.columns:
+                df[c] = pd.to_numeric(df[c], errors="coerce")
+        keep = [c for c in ["sector", "count", "pct", "amount"] if c in df.columns]
+        return df[keep].dropna(subset=["pct"])
 
 
 _PROVIDERS = {"sina": SinaProvider}

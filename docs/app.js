@@ -132,19 +132,22 @@ function renderMarket(m) {
   const tone = r.tone === "risk_on" ? "up" : (r.tone === "risk_off" ? "down" : "");
   const idx = (m.indices || []).map(i =>
     `<span class="idx ${i.pct >= 0 ? "up" : "down"}">${i.name} ${i.pct >= 0 ? "+" : ""}${i.pct}%</span>`).join("");
+  const sec = (m.sectors_top || []).map(s =>
+    `<span class="idx ${s.pct >= 0 ? "up" : "down"}">${s.sector} ${s.pct >= 0 ? "+" : ""}${s.pct}%</span>`).join("");
   el.innerHTML = `
     <div class="regime">
       <span class="regime-label ${tone}">${r.label}</span>
       <span class="money">赚钱效应 <b>${r.money_effect}</b>/100</span>
       <span class="breadth">涨<b class="up">${b.adv}</b> 跌<b class="down">${b.dec}</b> ｜ 涨停<b class="up">${b.limit_up}</b> 跌停<b class="down">${b.limit_down}</b> ｜ 总额 ${b.total_amount_yi} 亿</span>
     </div>
-    <div class="indices">${idx}</div>`;
+    <div class="indices">${idx}</div>
+    ${sec ? `<div class="indices"><span class="strip-label">领涨板块</span>${sec}</div>` : ""}`;
 }
 
 function renderSignals(sigs) {
   const ul = document.getElementById("signals");
   ul.innerHTML = "";
-  const dimName = { market: "市场", stock: "个股", watchlist: "自选", sector: "板块", news: "消息" };
+  const dimName = { market: "市场", stock: "个股", watchlist: "自选", sector: "板块", rule: "规则", news: "消息" };
   (sigs || []).forEach(s => {
     const li = document.createElement("li");
     li.className = `sig ${s.level}`;

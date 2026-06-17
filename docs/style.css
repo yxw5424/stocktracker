@@ -45,7 +45,10 @@ h1 { margin: 0 0 6px; font-size: 22px; }
 .sig-market { background: #3a2c4d; color: #d9b8ff; }
 .sig-stock { background: #21304d; color: #9fc1ff; }
 .sig-watchlist { background: rgba(255,140,26,.18); color: var(--high); }
+.sig-sector { background: #1d3a33; color: #7fe3c4; }
+.sig-rule { background: rgba(255,140,26,.22); color: var(--high); font-weight: 600; }
 .sig-msg { color: var(--txt); }
+.strip-label { color: var(--muted); margin-right: 4px; }
 
 .cards {
   display: grid; gap: 16px; padding: 16px 24px;

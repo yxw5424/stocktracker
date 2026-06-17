@@ -44,6 +44,7 @@ class Ctx:
     regime: dict
     watchlist: list
     rules: list
+    sectors: object
 
 
 # ─────────── 维度采集器(加新维度 = 加一个 @sig.register 函数)───────────
@@ -91,6 +92,23 @@ def collect_watchlist(ctx) -> list:
 
 
 @sig.register
+def collect_sector(ctx) -> list:
+    """板块轮动:领涨 / 领跌行业。"""
+    if ctx.sectors is None or getattr(ctx.sectors, "empty", True):
+        return []
+    s = ctx.sectors.sort_values("pct", ascending=False)
+    out = []
+    for _, r in s.head(3).iterrows():
+        out.append(Signal("sector", "hot", str(r["sector"]), "notice", 46 + abs(float(r["pct"])) * 3,
+                          f"板块领涨:{r['sector']} {float(r['pct']):+.2f}%（{int(r['count'])}只）",
+                          {"pct": float(r["pct"])}))
+    for _, r in s.tail(2).iterrows():
+        out.append(Signal("sector", "cold", str(r["sector"]), "info", 42 + abs(float(r["pct"])) * 3,
+                          f"板块领跌:{r['sector']} {float(r['pct']):+.2f}%", {"pct": float(r["pct"])}))
+    return out
+
+
+@sig.register
 def collect_rules(ctx) -> list:
     """提示词规则(scope=all)在全市场上的命中。"""
     out = []
@@ -115,7 +133,12 @@ def build_ctx(provider_name: str = "sina", watchlist: list | None = None) -> Ctx
     bd = mkt.breadth(spot)
     idx_list = mkt.index_summary(idx)
     rg = mkt.regime(bd, idx_list)
-    return Ctx(p, spot, idx, bd, idx_list, rg, list(watchlist or []), rulesmod.load_rules())
+    try:
+        sectors = p.sectors()       # 1 请求(行业板块)
+    except Exception as e:
+        print(f"[sectors] {e}")
+        sectors = None
+    return Ctx(p, spot, idx, bd, idx_list, rg, list(watchlist or []), rulesmod.load_rules(), sectors)
 
 
 def _watchlist_codes() -> list:
@@ -131,7 +154,13 @@ def main() -> None:
 
     ctx = build_ctx("sina", _watchlist_codes())
     digest = sig.fuse(ctx)
-    out = {"regime": ctx.regime, "breadth": ctx.breadth, "indices": ctx.indices, "signals": digest}
+    sec_top = []
+    if ctx.sectors is not None and not ctx.sectors.empty:
+        s = ctx.sectors.sort_values("pct", ascending=False)
+        sec_top = [{"sector": str(r["sector"]), "pct": round(float(r["pct"]), 2)}
+                   for _, r in s.head(5).iterrows()]
+    out = {"regime": ctx.regime, "breadth": ctx.breadth, "indices": ctx.indices,
+           "sectors_top": sec_top, "signals": digest}
 
     if args.json:
         os.makedirs(DATA_DIR, exist_ok=True)
