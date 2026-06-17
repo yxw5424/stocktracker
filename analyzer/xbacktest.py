@@ -105,12 +105,54 @@ def main() -> None:
     ap.add_argument("--signal", default="big_up_volume", choices=list(SIGNALS))
     ap.add_argument("--days", type=int, default=800)
     ap.add_argument("--limit", type=int, default=0, help="只取前 N 只(测试用)")
+    ap.add_argument("--all", action="store_true", help="共用一次面板,跑完所有信号做对比")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args()
 
     codes = uni.hs300()
     if args.limit:
         codes = codes[:args.limit]
+
+    if args.all:
+        panel = build_panel(codes, args.days)
+        print(f"\n面板:{len(panel)} 只 × 近{args.days}根(后复权·T+1·扣成本0.2%)\n")
+        scorecard = {"universe": "hs300", "n_stocks": len(panel), "days": args.days,
+                     "as_of": str(dt.date.today()), "signals": {}}
+        for sig, (fn, desc) in SIGNALS.items():
+            print(f"== {desc} ==")
+            card = {"desc": desc, "horizons": {}}
+            for h in (1, 3, 5, 10):
+                sr, br = [], []
+                for df in panel.values():
+                    c = df["close"].to_numpy(dtype=float)
+                    m = fn(df).fillna(False).to_numpy()
+                    n = len(c)
+                    for i in range(n - 1):
+                        x = i + 1 + h
+                        if x >= n:
+                            continue
+                        r = (c[x] / c[i + 1] - 1 - 0.002) * 100
+                        br.append(r)
+                        if m[i]:
+                            sr.append(r)
+                s, b = _stats(sr), _stats(br)
+                if s and b:
+                    edge = round(s["avg"] - b["avg"], 2)
+                    card["horizons"][f"{h}d"] = {"n": s["n"], "win_rate": s["win_rate"],
+                                                 "win_ci": s["win_ci"], "edge": edge}
+                    print(f"  {h:>2}d  N={s['n']:>5}  胜率{s['win_rate']:>5}%[{s['win_ci'][0]}~{s['win_ci'][1]}]"
+                          f"  信号{s['avg']:>6}%  基线{b['avg']:>6}%  EDGE={edge:>6}%")
+            scorecard["signals"][sig] = card
+            print()
+        # 存记分卡(供 C:实时买卖点信号层 读取)
+        out_path = os.path.join(ROOT, "docs", "data", "signal_scorecard.json")
+        os.makedirs(os.path.dirname(out_path), exist_ok=True)
+        with open(out_path, "w", encoding="utf-8") as f:
+            json.dump(scorecard, f, ensure_ascii=False, indent=2)
+        print(f"已存记分卡 → {out_path}")
+        print("⚠️ EDGE=信号−基线;正=有超额,负=不如随便买。已扣成本/T+1/后复权;历史≠未来;非投资建议。")
+        return
+
     res = cross_backtest(args.signal, codes, days=args.days)
 
     if args.json:

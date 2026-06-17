@@ -105,6 +105,9 @@ function render(data, hist) {
           ? t.alerts.map(a => `<span class="badge ${a.level}">${a.message}</span>`).join("")
           : '<span class="badge calm">无异动</span>'
       }</div>
+      <div class="points">${
+        (t.points || []).map(p => `<span class="pt pt-${p.grade}" title="沪深300历史·扣成本·非投资建议">${p.desc} · ${p.kind}${p.edge != null ? ` <b>${p.horizon}EDGE ${p.edge >= 0 ? "+" : ""}${p.edge}% 胜率${p.win_rate}%</b>` : ""}</span>`).join("")
+      }</div>
       <div class="view-toggle">
         <button data-view="intraday" ${hasIntraday ? "" : "disabled"}>分时</button>
         <button data-view="daily" ${hasDaily ? "" : "disabled"}>日K</button>

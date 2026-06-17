@@ -28,6 +28,7 @@ from . import analyze as analyzemod
 from . import fetch as fetchmod
 from . import notify as notifymod
 from . import rules as rulesmod
+from . import signalpoints as sigpts
 from . import state as statemod
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -66,6 +67,7 @@ def main() -> None:
     state_path = os.path.join(DATA_DIR, "state.json")
     state = statemod.load_state(state_path)
     wl_rules = [r for r in rulesmod.load_rules() if r.get("scope") == "watchlist"]
+    scorecard = sigpts.load_scorecard()   # 横截面信号记分卡(EDGE/胜率)
 
     market_open = args.force or args.demo or in_session(cfg, now)
     # 失败熔断:疑似被限频时冷却退避,本轮不取数、沿用旧数据(--force/--demo 可强制绕过)
@@ -139,6 +141,7 @@ def main() -> None:
         snapshot["targets"].append({
             "code": code, "name": target.get("name", code),
             "metrics": metrics, "alerts": alerts, "views": views,
+            "points": sigpts.signal_points(daily_df, scorecard),   # 买卖点信号(含EDGE)
         })
         if alerts:
             pending.append((target, metrics, alerts))

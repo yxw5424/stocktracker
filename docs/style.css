@@ -73,6 +73,12 @@ h1 { margin: 0 0 6px; font-size: 22px; }
 }
 .badge.high { background: rgba(255,140,26,.16); color: var(--high); }
 .badge.calm { background: #1c2740; color: var(--muted); }
+.points { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; }
+.pt { font-size: 12px; padding: 3px 9px; border-radius: 8px; background: #21304d; color: #cdd8ee; }
+.pt b { font-weight: 600; }
+.pt-edge_pos { background: rgba(24,184,154,.16); color: #6fe0c0; }   /* 候选买点(正EDGE) */
+.pt-edge_neg { background: rgba(255,77,79,.14); color: #ff9a9c; }    /* 反指(负EDGE) */
+.pt-edge_flat, .pt-unknown { background: #1c2740; color: var(--muted); }  /* 无超额/未回测 */
 .view-toggle { display: flex; gap: 6px; margin: 2px 0 8px; }
 .view-toggle button {
   font-size: 12px; padding: 3px 12px; border-radius: 8px; cursor: pointer;

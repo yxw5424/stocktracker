@@ -41,11 +41,45 @@ def _sig_reversal(df: pd.DataFrame, n: int = 5, drop: float = 8.0) -> pd.Series:
     return cum <= -drop
 
 
+def _sig_reversal_sharp(df: pd.DataFrame, n: int = 3, drop: float = 6.0) -> pd.Series:
+    return df["close"].pct_change(n) * 100 <= -drop
+
+
+def _rsi(close: pd.Series, n: int = 14) -> pd.Series:
+    d = close.diff()
+    up = d.clip(lower=0).rolling(n).mean()
+    dn = (-d.clip(upper=0)).rolling(n).mean().replace(0, 1e-9)
+    return 100 - 100 / (1 + up / dn)
+
+
+def _sig_rsi_oversold(df: pd.DataFrame, n: int = 14, th: float = 30) -> pd.Series:
+    r = _rsi(df["close"], n)
+    return (r < th) & (r.shift(1) >= th)   # 刚跌入超卖
+
+
+def _sig_momentum(df: pd.DataFrame, n: int = 20, up: float = 15.0) -> pd.Series:
+    return df["close"].pct_change(n) * 100 >= up   # 强动量(追强)
+
+
+def _sig_new_low(df: pd.DataFrame, n: int = 20) -> pd.Series:
+    prev_low = df["close"].shift(1).rolling(n).min()
+    return df["close"] < prev_low   # 创20日新低(抄新低)
+
+
+def _sig_limit_up(df: pd.DataFrame) -> pd.Series:
+    return df["close"].pct_change() * 100 >= 9.7   # 涨停(主板近似)
+
+
 SIGNALS = {
-    "big_up_volume": (_sig_big_up_volume, "放量大涨(涨幅≥5% 且量≥2倍20日均量)= 追涨"),
+    "big_up_volume": (_sig_big_up_volume, "放量大涨(涨幅≥5%且量≥2倍均量)= 追涨"),
+    "momentum_20d": (_sig_momentum, "20日强动量(涨≥15%)= 追强"),
+    "limit_up": (_sig_limit_up, "涨停(次日买入)= 打板接力"),
     "breakout_20d": (_sig_breakout, "突破20日新高"),
-    "cross_ma20": (_sig_above_ma, "上穿20日均线"),
+    "cross_ma20": (_sig_above_ma, "上穿20日均线 = 金叉"),
     "reversal_5d": (_sig_reversal, "短期反转(近5日跌≥8%)= 抄反转"),
+    "reversal_sharp": (_sig_reversal_sharp, "急跌反转(近3日跌≥6%)"),
+    "rsi_oversold": (_sig_rsi_oversold, "RSI跌破30(超卖)"),
+    "new_low_20d": (_sig_new_low, "创20日新低(抄新低)"),
 }
 
 
