@@ -169,6 +169,35 @@ async function loadNotify() {
     ul.appendChild(li);
   });
 }
+// ───────── 一键回测 ─────────
+async function loadBtSignals() {
+  try {
+    const d = await api("/signals");
+    document.getElementById("bt-signal").innerHTML =
+      d.signals.map(s => `<option value="${s.key}">${s.desc}</option>`).join("");
+  } catch (e) {}
+}
+async function runBacktest() {
+  const code = document.getElementById("bt-code").value.trim();
+  const signal = document.getElementById("bt-signal").value;
+  const box = document.getElementById("bt-result");
+  box.innerHTML = '<span class="hint">回测中…</span>';
+  try {
+    const r = await api("/backtest", { method: "POST", body: JSON.stringify({ code, signal }) });
+    if (r.error) { box.innerHTML = `<span class="warn">${r.error}</span>`; return; }
+    let html = `<div class="hint">${r.code} 「${r.signal_desc}」 近${r.sample_days}根·出现${r.occurrences}次</div>`;
+    html += '<table class="scorecard"><thead><tr><th>持有</th><th>样本外N</th><th>胜率(区间)</th><th>均值</th><th>盈亏比</th></tr></thead><tbody>';
+    for (const [h, hs] of Object.entries(r.horizons)) {
+      const o = hs.oos;
+      if (!o) { html += `<tr><td>${h}</td><td colspan="4" class="hint">样本外无样本</td></tr>`; continue; }
+      const flag = o.reliable ? "" : " ⚠少";
+      html += `<tr><td>${h}</td><td>${o.n}${flag}</td><td>${o.win_rate}% [${o.win_ci[0]}~${o.win_ci[1]}]</td><td>${o.avg}%</td><td>${o.profit_factor ?? "-"}</td></tr>`;
+    }
+    html += `</tbody></table><div class="hint">${(r.caveats || []).join(";")}</div>`;
+    box.innerHTML = html;
+  } catch (e) { box.innerHTML = `<span class="warn">回测失败:${e.message}</span>`; }
+}
+
 async function testNotify() {
   try {
     const r = await api("/notify/test", { method: "POST" });
@@ -182,8 +211,9 @@ function mountConsole() {
   document.querySelectorAll("#nav button").forEach(b => b.addEventListener("click", () => switchTab(b.dataset.view)));
   document.getElementById("wl-add").addEventListener("click", addWatch);
   document.getElementById("rule-parse").addEventListener("click", parseRule);
+  document.getElementById("bt-run").addEventListener("click", runBacktest);
   document.getElementById("notify-test").addEventListener("click", testNotify);
-  loadWatchlist(); loadRules(); loadNotify();
+  loadWatchlist(); loadRules(); loadNotify(); loadBtSignals();
 }
 
 function showLogin() {

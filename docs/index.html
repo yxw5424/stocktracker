@@ -26,6 +26,11 @@
       <ul id="signals" class="signals"></ul>
     </section>
 
+    <section class="signals-wrap">
+      <h2>信号 EDGE 体检 · 沪深300历史 <small>正=有超额,负=反指;后复权·T+1·扣成本·非投资建议</small></h2>
+      <table id="scorecard" class="scorecard"></table>
+    </section>
+
     <h2 class="section-title">自选盯盘</h2>
     <main id="cards" class="cards"></main>
 
@@ -56,6 +61,16 @@
       <div id="rule-draft" class="rule-draft" hidden></div>
       <h4>已有规则</h4>
       <ul id="rule-list" class="ctl-list"></ul>
+    </section>
+
+    <section class="panel">
+      <h3>一键回测 <small>诚实版:后复权·T+1·扣成本·只看样本外</small></h3>
+      <div class="row">
+        <input id="bt-code" class="field" placeholder="6位代码,如 600909" maxlength="6">
+        <select id="bt-signal" class="field"></select>
+        <button id="bt-run" class="btn btn-primary">回测</button>
+      </div>
+      <div id="bt-result" class="bt-result"></div>
     </section>
 
     <section class="panel">

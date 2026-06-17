@@ -31,6 +31,12 @@ h1 { margin: 0 0 6px; font-size: 22px; }
 .idx.up { color: var(--up); }
 .idx.down { color: var(--down); }
 .signals-wrap { padding: 8px 24px 4px; }
+.scorecard { width: 100%; max-width: 720px; border-collapse: collapse; font-size: 13px; margin-top: 6px; }
+.scorecard th { text-align: left; color: var(--muted); font-weight: 400; padding: 6px 10px; border-bottom: 1px solid var(--line); }
+.scorecard td { padding: 6px 10px; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+.scorecard tr.sc-pos td b { color: #6fe0c0; }
+.scorecard tr.sc-neg td b { color: #ff9a9c; }
+.scorecard tr.sc-flat td b { color: var(--muted); }
 .section-title { padding: 4px 24px 0; font-size: 16px; color: var(--muted); }
 .signals { list-style: none; padding: 0; margin: 6px 0 0; }
 .signals .sig {

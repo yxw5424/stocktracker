@@ -162,15 +162,34 @@ function renderSignals(sigs) {
   });
 }
 
+function renderScorecard(sc) {
+  const el = document.getElementById("scorecard");
+  if (!el) return;
+  if (!sc || !sc.signals) { el.innerHTML = ""; return; }
+  const rows = Object.values(sc.signals).map(v => {
+    const h = (v.horizons && v.horizons["10d"]) || {};
+    return { desc: v.desc, edge: h.edge, win: h.win_rate, n: h.n };
+  }).filter(r => r.edge != null).sort((a, b) => b.edge - a.edge);
+  el.innerHTML = `<thead><tr><th>信号</th><th>10日EDGE</th><th>胜率</th><th>样本</th><th>判定</th></tr></thead><tbody>${
+    rows.map(r => {
+      const cls = r.edge >= 0.3 ? "pos" : (r.edge <= -0.15 ? "neg" : "flat");
+      const verdict = r.edge >= 0.3 ? "✅ 有超额" : (r.edge <= -0.15 ? "❌ 反指" : "⭕ 无超额");
+      return `<tr class="sc-${cls}"><td>${r.desc}</td><td><b>${r.edge >= 0 ? "+" : ""}${r.edge}%</b></td><td>${r.win}%</td><td>${r.n}</td><td>${verdict}</td></tr>`;
+    }).join("")
+  }</tbody>`;
+}
+
 async function load() {
-  const [data, hist, market] = await Promise.all([
+  const [data, hist, market, sc] = await Promise.all([
     getJSON("data/data.json"),
     getJSON("data/alerts_history.json"),
     getJSON("data/market.json"),
+    getJSON("data/signal_scorecard.json"),
   ]);
   render(data, hist || []);
   renderMarket(market);
   renderSignals(market ? market.signals : []);
+  renderScorecard(sc);
 }
 
 window.addEventListener("resize", () => Object.values(charts).forEach(c => c.resize()));

@@ -145,7 +145,29 @@ def del_watchlist(code: str):
 
 
 # ──────────────── 规则 ────────────────
+from analyzer import backtest as btmod  # noqa: E402
 from analyzer import rules as rulesmod  # noqa: E402
+
+
+@app.get("/api/signals")
+def list_signals():
+    return {"signals": [{"key": k, "desc": v[1]} for k, v in btmod.SIGNALS.items()]}
+
+
+class BacktestReq(BaseModel):
+    code: str
+    signal: str = "big_up_volume"
+    days: int = 800
+
+
+@app.post("/api/backtest")
+def run_backtest(req: BacktestReq):
+    if req.signal not in btmod.SIGNALS:
+        raise HTTPException(400, "未知信号")
+    code = req.code.strip()
+    if not (code.isdigit() and len(code) == 6):
+        raise HTTPException(400, "代码须为 6 位数字")
+    return btmod.backtest(code, req.signal, days=req.days)
 
 
 class RuleModel(BaseModel):
