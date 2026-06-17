@@ -1,6 +1,6 @@
 {
-  "updated_at": "2026-06-17T22:51:10",
-  "market_open": true,
+  "updated_at": "2026-06-17T23:06:22",
+  "market_open": false,
   "mode": "fast",
   "demo": false,
   "targets": [
@@ -2065,7 +2065,8 @@
           "win_rate": 53.2,
           "horizon": "10d"
         }
-      ]
+      ],
+      "stale": true
     },
     {
       "code": "300394",
@@ -4128,7 +4129,8 @@
           "win_rate": 49.4,
           "horizon": "10d"
         }
-      ]
+      ],
+      "stale": true
     },
     {
       "code": "300308",
@@ -6191,7 +6193,8 @@
           "win_rate": 49.4,
           "horizon": "10d"
         }
-      ]
+      ],
+      "stale": true
     },
     {
       "code": "601138",
@@ -8244,7 +8247,8 @@
           }
         ]
       },
-      "points": []
+      "points": [],
+      "stale": true
     },
     {
       "code": "688017",
@@ -10316,7 +10320,8 @@
           "win_rate": 53.2,
           "horizon": "10d"
         }
-      ]
+      ],
+      "stale": true
     },
     {
       "code": "300285",
@@ -12408,7 +12413,8 @@
           "win_rate": 47.7,
           "horizon": "10d"
         }
-      ]
+      ],
+      "stale": true
     }
   ],
   "next_interval_minutes": 15

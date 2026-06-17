@@ -181,6 +181,18 @@
       }
     },
     {
+      "dim": "watchlist",
+      "kind": "quote",
+      "subject": "sz300285",
+      "level": "high",
+      "score": 119.251,
+      "message": "⭐国瓷材料 sz300285 +16.42% 现价78.5",
+      "data": {
+        "pct": 16.417,
+        "price": 78.5
+      }
+    },
+    {
       "dim": "rule",
       "kind": "market_big_up_volume",
       "subject": "sh603986",
@@ -255,13 +267,37 @@
     {
       "dim": "watchlist",
       "kind": "quote",
-      "subject": "sh600909",
-      "level": "high",
-      "score": 84.304,
-      "message": "⭐华安证券 sh600909 +4.77% 现价8.79",
+      "subject": "sz300308",
+      "level": "info",
+      "score": 76.735,
+      "message": "⭐中际旭创 sz300308 +2.25% 现价1276.11",
       "data": {
-        "pct": 4.768,
-        "price": 8.79
+        "pct": 2.245,
+        "price": 1276.11
+      }
+    },
+    {
+      "dim": "watchlist",
+      "kind": "quote",
+      "subject": "sh688017",
+      "level": "info",
+      "score": 74.29,
+      "message": "⭐绿的谐波 sh688017 +1.43% 现价381.6",
+      "data": {
+        "pct": 1.43,
+        "price": 381.6
+      }
+    },
+    {
+      "dim": "watchlist",
+      "kind": "quote",
+      "subject": "sz300394",
+      "level": "info",
+      "score": 74.269,
+      "message": "⭐天孚通信 sz300394 +1.42% 现价329.33",
+      "data": {
+        "pct": 1.423,
+        "price": 329.33
       }
     },
     {
@@ -274,6 +310,18 @@
       "data": {
         "pct": -1.38,
         "price": 42.87
+      }
+    },
+    {
+      "dim": "watchlist",
+      "kind": "quote",
+      "subject": "sh601138",
+      "level": "info",
+      "score": 71.071,
+      "message": "⭐工业富联 sh601138 -0.36% 现价72.64",
+      "data": {
+        "pct": -0.357,
+        "price": 72.64
       }
     },
     {
@@ -337,56 +385,6 @@
       "message": "板块领涨:化纤行业 +2.95%（26只）",
       "data": {
         "pct": 2.9471661863593
-      }
-    },
-    {
-      "dim": "sector",
-      "kind": "cold",
-      "subject": "纺织机械",
-      "level": "info",
-      "score": 51.2495112046923,
-      "message": "板块领跌:纺织机械 -3.08%",
-      "data": {
-        "pct": -3.0831704015641
-      }
-    },
-    {
-      "dim": "sector",
-      "kind": "cold",
-      "subject": "酒店旅游",
-      "level": "info",
-      "score": 49.7468499976047,
-      "message": "板块领跌:酒店旅游 -2.58%",
-      "data": {
-        "pct": -2.5822833325349
-      }
-    },
-    {
-      "dim": "market",
-      "kind": "index",
-      "subject": "sz399006",
-      "level": "notice",
-      "score": 46.24,
-      "message": "创业板指 +1.56%",
-      "data": {
-        "code": "sz399006",
-        "name": "创业板指",
-        "price": 4167.05,
-        "pct": 1.56
-      }
-    },
-    {
-      "dim": "market",
-      "kind": "index",
-      "subject": "sz399001",
-      "level": "notice",
-      "score": 45.24,
-      "message": "深证成指 +1.31%",
-      "data": {
-        "code": "sz399001",
-        "name": "深证成指",
-        "price": 15880.95,
-        "pct": 1.31
       }
     }
   ]
