@@ -1,0 +1,11 @@
+{
+  "name": "stocktracker",
+  "owner": { "name": "yxw5424" },
+  "plugins": [
+    {
+      "name": "stocktracker",
+      "source": ".",
+      "description": "A股多维实时分析:全市场异动扫描、市场态势、自选盯盘、信号回测、自然语言提示词规则。仅客观信息,不构成投资建议。"
+    }
+  ]
+}
