@@ -11,18 +11,29 @@ Ctrl+C 退出。本地预览网站:python -m http.server -d docs 8010
 """
 from __future__ import annotations
 
-import json
+import io
 import os
-import subprocess
 import sys
-import time
 
-# Windows 控制台默认 cp1252,打印中文会崩;统一切 UTF-8。
-for _s in (sys.stdout, sys.stderr):
+# Windows cp1252 控制台下中文 print 会崩。强制 stdout/stderr 为 UTF-8:
+# 先 reconfigure(errors=backslashreplace),失败再用 TextIOWrapper 重新包一层。
+# 同时为本进程及其子进程(run.py/digest.py)设 PYTHONUTF8=1。
+os.environ.setdefault("PYTHONUTF8", "1")
+os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+for _name in ("stdout", "stderr"):
+    _stream = getattr(sys, _name)
     try:
-        _s.reconfigure(encoding="utf-8")
+        _stream.reconfigure(encoding="utf-8", errors="backslashreplace", line_buffering=True)
     except Exception:
-        pass
+        try:
+            setattr(sys, _name, io.TextIOWrapper(_stream.buffer, encoding="utf-8",
+                                                 errors="backslashreplace", line_buffering=True))
+        except Exception:
+            pass
+
+import json
+import subprocess
+import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA = os.path.join(ROOT, "docs", "data", "data.json")

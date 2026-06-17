@@ -1,6 +1,21 @@
 {
-  "targets": {},
-  "fast_mode_until": null,
+  "targets": {
+    "600909": {
+      "last_alert_by_type": {
+        "pct_change": "2026-06-17T13:00:55.701147",
+        "slope_surge": "2026-06-17T13:00:55.701147"
+      },
+      "last_report": "2026-06-17T13:00:55.701147"
+    },
+    "603009": {
+      "last_alert_by_type": {
+        "pct_change": "2026-06-17T13:00:55.701147",
+        "slope_surge": "2026-06-17T13:00:55.701147"
+      },
+      "last_report": "2026-06-17T13:00:55.701147"
+    }
+  },
+  "fast_mode_until": "2026-06-17T13:50:25.252676",
   "fetch_fail_streak": 0,
   "fetch_cooldown_until": null
 }
