@@ -1,78 +1,78 @@
 {
   "regime": {
-    "money_effect": 38,
+    "money_effect": 44,
     "label": "普跌 · 亏钱效应",
     "tone": "risk_off",
-    "up_ratio": 0.257,
-    "net_limit": 60,
-    "index_avg_pct": 0.18
+    "up_ratio": 0.263,
+    "net_limit": 73,
+    "index_avg_pct": 1.1
   },
   "breadth": {
     "total": 5527,
-    "adv": 1405,
-    "dec": 4052,
+    "adv": 1433,
+    "dec": 4024,
     "flat": 70,
-    "up_ratio": 0.257,
-    "limit_up": 61,
+    "up_ratio": 0.263,
+    "limit_up": 74,
     "limit_down": 1,
-    "up5": 237,
-    "down5": 82,
-    "median_pct": -1.36,
-    "mean_pct": -0.77,
-    "total_amount_yi": 18512
+    "up5": 302,
+    "down5": 142,
+    "median_pct": -1.54,
+    "mean_pct": -0.85,
+    "total_amount_yi": 25226
   },
   "indices": [
     {
       "code": "sh000001",
       "name": "上证指数",
-      "price": 4080.11,
-      "pct": -0.29
+      "price": 4091.65,
+      "pct": -0.01
     },
     {
       "code": "sz399001",
       "name": "深证成指",
-      "price": 15726.44,
-      "pct": 0.33
+      "price": 15779.59,
+      "pct": 0.67
     },
     {
       "code": "sz399006",
       "name": "创业板指",
-      "price": 4097.71,
-      "pct": -0.13
+      "price": 4130.2,
+      "pct": 0.66
     },
     {
       "code": "sh000688",
       "name": "科创50",
-      "price": 1775.35,
-      "pct": 0.96
+      "price": 1824.18,
+      "pct": 3.74
     },
     {
       "code": "sh000300",
       "name": "沪深300",
-      "price": 4885.97,
-      "pct": 0.04
+      "price": 4905.22,
+      "pct": 0.43
     }
   ],
   "sectors_top": [
     {
       "sector": "玻璃行业",
-      "pct": 3.88
+      "pct": 3.16
     },
     {
       "sector": "化纤行业",
-      "pct": 3.07
+      "pct": 3.05
     },
     {
       "sector": "电子器件",
-      "pct": 1.42
+      "pct": 2.32
     },
     {
       "sector": "次新股",
-      "pct": 1.07
+      "pct": 2.15
     },
     {
       "sector": "化工行业",
-      "pct": 0.99
+      "pct": 1.11
     }
   ],
   "signals": [
@@ -81,12 +81,64 @@
       "kind": "anomaly",
       "subject": "bj920178",
       "level": "notice",
-      "score": 148.0,
-      "message": "锐翔智能 bj920178 +20.34% 振幅20.1% 异动分148",
+      "score": 150.9,
+      "message": "锐翔智能 bj920178 +21.18% 振幅20.1% 异动分151",
       "data": {
-        "pct": 20.341,
+        "pct": 21.177,
         "amplitude": 20.056827678422195,
-        "amount": 490347101.0
+        "amount": 556840419.0
+      }
+    },
+    {
+      "dim": "stock",
+      "kind": "anomaly",
+      "subject": "sz300475",
+      "level": "notice",
+      "score": 149.8,
+      "message": "香农芯创 sz300475 +20.00% 振幅23.6% 异动分150",
+      "data": {
+        "pct": 19.999,
+        "amplitude": 23.62408884105474,
+        "amount": 11137058689.0
+      }
+    },
+    {
+      "dim": "stock",
+      "kind": "anomaly",
+      "subject": "sh688598",
+      "level": "notice",
+      "score": 149.5,
+      "message": "金博股份 sh688598 +20.00% 振幅23.6% 异动分150",
+      "data": {
+        "pct": 20.005,
+        "amplitude": 23.596047240298866,
+        "amount": 1545514015.0
+      }
+    },
+    {
+      "dim": "stock",
+      "kind": "anomaly",
+      "subject": "sh688082",
+      "level": "notice",
+      "score": 144.2,
+      "message": "盛美上海 sh688082 +20.00% 振幅22.0% 异动分144",
+      "data": {
+        "pct": 20.0,
+        "amplitude": 21.960132890365436,
+        "amount": 3841198708.0
+      }
+    },
+    {
+      "dim": "stock",
+      "kind": "anomaly",
+      "subject": "bj920083",
+      "level": "notice",
+      "score": 143.4,
+      "message": "金戈新材 bj920083 +15.57% 振幅28.0% 异动分143",
+      "data": {
+        "pct": 15.569,
+        "amplitude": 27.993748779058393,
+        "amount": 800735554.0
       }
     },
     {
@@ -94,12 +146,12 @@
       "kind": "anomaly",
       "subject": "sh688333",
       "level": "notice",
-      "score": 142.3,
+      "score": 141.9,
       "message": "铂力特 sh688333 +20.00% 振幅21.1% 异动分142",
       "data": {
         "pct": 20.0,
         "amplitude": 21.100671140939596,
-        "amount": 1409276495.0
+        "amount": 1447999390.0
       }
     },
     {
@@ -107,12 +159,12 @@
       "kind": "anomaly",
       "subject": "sz300903",
       "level": "notice",
-      "score": 141.4,
+      "score": 141.2,
       "message": "科翔股份 sz300903 +20.00% 振幅20.7% 异动分141",
       "data": {
         "pct": 20.0,
         "amplitude": 20.721271393643036,
-        "amount": 2769992639.0
+        "amount": 2930933812.0
       }
     },
     {
@@ -120,64 +172,36 @@
       "kind": "anomaly",
       "subject": "sz300737",
       "level": "notice",
-      "score": 140.1,
+      "score": 139.6,
       "message": "科顺股份 sz300737 +20.00% 振幅19.3% 异动分140",
       "data": {
         "pct": 20.0,
         "amplitude": 19.26470588235295,
-        "amount": 827483828.0
+        "amount": 847593332.0
       }
     },
     {
-      "dim": "stock",
-      "kind": "anomaly",
-      "subject": "sz301111",
-      "level": "notice",
-      "score": 138.8,
-      "message": "粤万年青 sz301111 +19.99% 振幅21.0% 异动分139",
+      "dim": "rule",
+      "kind": "market_big_up_volume",
+      "subject": "sh603986",
+      "level": "high",
+      "score": 95,
+      "message": "📐规则「全市场放量大涨」命中:兆易创新 sh603986 +7.96%",
       "data": {
-        "pct": 19.992,
-        "amplitude": 21.02137767220902,
-        "amount": 302137347.0
+        "rule": "market_big_up_volume",
+        "pct": 7.962
       }
     },
     {
-      "dim": "stock",
-      "kind": "anomaly",
-      "subject": "sz300735",
-      "level": "notice",
-      "score": 137.1,
-      "message": "光弘科技 sz300735 +19.99% 振幅18.9% 异动分137",
+      "dim": "rule",
+      "kind": "market_big_up_volume",
+      "subject": "sh688525",
+      "level": "high",
+      "score": 95,
+      "message": "📐规则「全市场放量大涨」命中:佰维存储 sh688525 +7.18%",
       "data": {
-        "pct": 19.99,
-        "amplitude": 18.87976822790922,
-        "amount": 864368835.0
-      }
-    },
-    {
-      "dim": "stock",
-      "kind": "anomaly",
-      "subject": "sz301366",
-      "level": "notice",
-      "score": 134.2,
-      "message": "一博科技 sz301366 +20.00% 振幅14.4% 异动分134",
-      "data": {
-        "pct": 20.0,
-        "amplitude": 14.412371134020624,
-        "amount": 1239263466.0
-      }
-    },
-    {
-      "dim": "stock",
-      "kind": "anomaly",
-      "subject": "sh688079",
-      "level": "notice",
-      "score": 133.3,
-      "message": "美迪凯 sh688079 +19.98% 振幅16.4% 异动分133",
-      "data": {
-        "pct": 19.985,
-        "amplitude": 16.416228399699477,
-        "amount": 467597882.0
+        "rule": "market_big_up_volume",
+        "pct": 7.181
       }
     },
     {
@@ -195,49 +219,13 @@
     {
       "dim": "rule",
       "kind": "market_big_up_volume",
-      "subject": "sz002156",
+      "subject": "sz300475",
       "level": "high",
       "score": 95,
-      "message": "📐规则「全市场放量大涨」命中:通富微电 sz002156 +7.44%",
+      "message": "📐规则「全市场放量大涨」命中:香农芯创 sz300475 +20.00%",
       "data": {
         "rule": "market_big_up_volume",
-        "pct": 7.437
-      }
-    },
-    {
-      "dim": "rule",
-      "kind": "market_big_up_volume",
-      "subject": "sz002851",
-      "level": "high",
-      "score": 95,
-      "message": "📐规则「全市场放量大涨」命中:麦格米特 sz002851 +7.75%",
-      "data": {
-        "rule": "market_big_up_volume",
-        "pct": 7.749
-      }
-    },
-    {
-      "dim": "rule",
-      "kind": "market_big_up_volume",
-      "subject": "sh600105",
-      "level": "high",
-      "score": 95,
-      "message": "📐规则「全市场放量大涨」命中:XD永鼎股 sh600105 +7.49%",
-      "data": {
-        "rule": "market_big_up_volume",
-        "pct": 7.491
-      }
-    },
-    {
-      "dim": "rule",
-      "kind": "market_big_up_volume",
-      "subject": "sz000100",
-      "level": "high",
-      "score": 95,
-      "message": "📐规则「全市场放量大涨」命中:TCL科技 sz000100 +9.25%",
-      "data": {
-        "rule": "market_big_up_volume",
-        "pct": 9.247
+        "pct": 19.999
       }
     },
     {
@@ -246,10 +234,22 @@
       "subject": "sz002436",
       "level": "high",
       "score": 95,
-      "message": "📐规则「全市场放量大涨」命中:兴森科技 sz002436 +9.98%",
+      "message": "📐规则「全市场放量大涨」命中:兴森科技 sz002436 +9.21%",
       "data": {
         "rule": "market_big_up_volume",
-        "pct": 9.977
+        "pct": 9.206
+      }
+    },
+    {
+      "dim": "rule",
+      "kind": "market_big_up_volume",
+      "subject": "sz000100",
+      "level": "high",
+      "score": 95,
+      "message": "📐规则「全市场放量大涨」命中:TCL科技 sz000100 +10.11%",
+      "data": {
+        "rule": "market_big_up_volume",
+        "pct": 10.108
       }
     },
     {
@@ -257,11 +257,11 @@
       "kind": "quote",
       "subject": "sh600909",
       "level": "high",
-      "score": 81.799,
-      "message": "⭐华安证券 sh600909 +3.93% 现价8.72",
+      "score": 82.156,
+      "message": "⭐华安证券 sh600909 +4.05% 现价8.73",
       "data": {
-        "pct": 3.933,
-        "price": 8.72
+        "pct": 4.052,
+        "price": 8.73
       }
     },
     {
@@ -269,11 +269,11 @@
       "kind": "quote",
       "subject": "sh603009",
       "level": "info",
-      "score": 75.313,
-      "message": "⭐北特科技 sh603009 -1.77% 现价42.7",
+      "score": 74.968,
+      "message": "⭐北特科技 sh603009 -1.66% 现价42.75",
       "data": {
-        "pct": -1.771,
-        "price": 42.7
+        "pct": -1.656,
+        "price": 42.75
       }
     },
     {
@@ -281,15 +281,15 @@
       "kind": "regime",
       "subject": "MARKET",
       "level": "high",
-      "score": 60.9,
-      "message": "市场形势:普跌 · 亏钱效应(赚钱效应 38/100;涨1405/跌4052,涨停61/跌停1)",
+      "score": 65.5,
+      "message": "市场形势:普跌 · 亏钱效应(赚钱效应 44/100;涨1433/跌4024,涨停74/跌停1)",
       "data": {
-        "money_effect": 38,
+        "money_effect": 44,
         "label": "普跌 · 亏钱效应",
         "tone": "risk_off",
-        "up_ratio": 0.257,
-        "net_limit": 60,
-        "index_avg_pct": 0.18
+        "up_ratio": 0.263,
+        "net_limit": 73,
+        "index_avg_pct": 1.1
       }
     },
     {
@@ -297,10 +297,10 @@
       "kind": "hot",
       "subject": "玻璃行业",
       "level": "notice",
-      "score": 57.6393202461178,
-      "message": "板块领涨:玻璃行业 +3.88%（19只）",
+      "score": 55.4931145619689,
+      "message": "板块领涨:玻璃行业 +3.16%（19只）",
       "data": {
-        "pct": 3.8797734153726
+        "pct": 3.1643715206563
       }
     },
     {
@@ -308,21 +308,24 @@
       "kind": "hot",
       "subject": "化纤行业",
       "level": "notice",
-      "score": 55.2103746397696,
-      "message": "板块领涨:化纤行业 +3.07%（26只）",
+      "score": 55.1412103746397,
+      "message": "板块领涨:化纤行业 +3.05%（26只）",
       "data": {
-        "pct": 3.0701248799232
+        "pct": 3.0470701248799
       }
     },
     {
-      "dim": "sector",
-      "kind": "cold",
-      "subject": "纺织机械",
-      "level": "info",
-      "score": 51.0239133704316,
-      "message": "板块领跌:纺织机械 -3.01%",
+      "dim": "market",
+      "kind": "index",
+      "subject": "sh000688",
+      "level": "notice",
+      "score": 54.96,
+      "message": "科创50 +3.74%",
       "data": {
-        "pct": -3.0079711234772
+        "code": "sh000688",
+        "name": "科创50",
+        "price": 1824.18,
+        "pct": 3.74
       }
     },
     {
@@ -330,10 +333,21 @@
       "kind": "hot",
       "subject": "电子器件",
       "level": "notice",
-      "score": 50.265142403142704,
-      "message": "板块领涨:电子器件 +1.42%（152只）",
+      "score": 52.9578363108703,
+      "message": "板块领涨:电子器件 +2.32%（152只）",
       "data": {
-        "pct": 1.4217141343809
+        "pct": 2.3192787702901
+      }
+    },
+    {
+      "dim": "sector",
+      "kind": "cold",
+      "subject": "纺织机械",
+      "level": "info",
+      "score": 52.2421416754398,
+      "message": "板块领跌:纺织机械 -3.41%",
+      "data": {
+        "pct": -3.4140472251466
       }
     },
     {
@@ -341,10 +355,10 @@
       "kind": "cold",
       "subject": "酒店旅游",
       "level": "info",
-      "score": 50.0774205911943,
-      "message": "板块领跌:酒店旅游 -2.69%",
+      "score": 50.5589038470753,
+      "message": "板块领跌:酒店旅游 -2.85%",
       "data": {
-        "pct": -2.6924735303981
+        "pct": -2.8529679490251
       }
     }
   ]
