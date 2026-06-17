@@ -27,6 +27,7 @@ for _stream in (sys.stdout, sys.stderr):
 from . import analyze as analyzemod
 from . import fetch as fetchmod
 from . import notify as notifymod
+from . import rules as rulesmod
 from . import state as statemod
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -64,6 +65,7 @@ def main() -> None:
 
     state_path = os.path.join(DATA_DIR, "state.json")
     state = statemod.load_state(state_path)
+    wl_rules = [r for r in rulesmod.load_rules() if r.get("scope") == "watchlist"]
 
     market_open = args.force or args.demo or in_session(cfg, now)
     # 失败熔断:疑似被限频时冷却退避,本轮不取数、沿用旧数据(--force/--demo 可强制绕过)
@@ -104,6 +106,13 @@ def main() -> None:
 
         metrics = analyzemod.analyze(analysis_df, cfg, None)
         alerts = analyzemod.evaluate_triggers(metrics, target, cfg)
+        # 提示词规则(scope=watchlist):用分钟级特征评估硬指标 DSL
+        feats = {"pct_change": metrics["pct_window"], "volume_ratio": metrics["vol_ratio"],
+                 "slope": metrics["slope"], "price": metrics["price"]}
+        for r in wl_rules:
+            if rulesmod.eval_rule(r, feats):
+                alerts.append({"type": f"rule:{r['id']}", "level": "high",
+                               "message": f"📐规则「{r['name']}」命中"})
         if any(a["type"] == "slope_surge" for a in alerts):
             any_surge = True
 

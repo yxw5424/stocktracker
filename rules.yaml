@@ -1,0 +1,37 @@
+# ───────────────────────────────────────────────────────────────
+# 提示词规则(由 /rule 命令把大白话拆成的硬指标 DSL 可写到这里)
+# 引擎会在实时数据上执行;命中即告警。只判客观硬指标,不判方向。
+#
+# indicator 可用:
+#   全市场(scope: all)      → pct_change(涨跌幅%) / amount(成交额元) / amplitude(振幅%) / price
+#   自选分钟(scope: watchlist)→ pct_change(区间涨跌幅%) / volume_ratio(量比) / slope(斜率%/h) / price
+# op: >= > <= < ==
+# ───────────────────────────────────────────────────────────────
+
+rules:
+  - id: market_big_up_volume
+    name: 全市场放量大涨
+    scope: all
+    logic: AND
+    conditions:
+      - { indicator: pct_change, op: ">=", value: 7.0 }
+      - { indicator: amount, op: ">=", value: 300000000 }   # 成交额 ≥ 3 亿
+    cooldown_min: 60
+
+  - id: watch_surge
+    name: 自选斜率激增放量
+    scope: watchlist
+    logic: AND
+    conditions:
+      - { indicator: slope, op: ">=", value: 4.0 }          # 斜率 ≥ 4%/小时
+      - { indicator: volume_ratio, op: ">=", value: 2.0 }   # 量比 ≥ 2
+    cooldown_min: 30
+
+  - id: watch_dump
+    name: 自选放量跳水
+    scope: watchlist
+    logic: AND
+    conditions:
+      - { indicator: pct_change, op: "<=", value: -3.0 }
+      - { indicator: volume_ratio, op: ">=", value: 1.5 }
+    cooldown_min: 30

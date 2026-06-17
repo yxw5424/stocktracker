@@ -19,6 +19,7 @@ import yaml
 from . import fetch as fetchmod
 from . import market as mkt
 from . import providers as prov
+from . import rules as rulesmod
 from . import screen as screenmod
 from . import signals as sig
 from .signals import Signal
@@ -42,6 +43,7 @@ class Ctx:
     indices: list
     regime: dict
     watchlist: list
+    rules: list
 
 
 # ─────────── 维度采集器(加新维度 = 加一个 @sig.register 函数)───────────
@@ -88,6 +90,22 @@ def collect_watchlist(ctx) -> list:
     return out
 
 
+@sig.register
+def collect_rules(ctx) -> list:
+    """提示词规则(scope=all)在全市场上的命中。"""
+    out = []
+    for r in [x for x in ctx.rules if x.get("scope", "all") == "all"]:
+        hit = rulesmod.match_dataframe(r, ctx.spot)
+        if hit is None or hit.empty:
+            continue
+        hit = hit[~hit["name"].astype(str).str.contains("ST", case=False, na=False)]
+        for _, row in hit.sort_values("amount", ascending=False).head(6).iterrows():
+            out.append(Signal("rule", r["id"], row["code"], "high", 95,
+                              f"📐规则「{r['name']}」命中:{row['name']} {row['code']} {row['pct']:+.2f}%",
+                              {"rule": r["id"], "pct": float(row["pct"])}))
+    return out
+
+
 # ─────────────────────────── 编排 ───────────────────────────
 
 def build_ctx(provider_name: str = "sina", watchlist: list | None = None) -> Ctx:
@@ -97,7 +115,7 @@ def build_ctx(provider_name: str = "sina", watchlist: list | None = None) -> Ctx
     bd = mkt.breadth(spot)
     idx_list = mkt.index_summary(idx)
     rg = mkt.regime(bd, idx_list)
-    return Ctx(p, spot, idx, bd, idx_list, rg, list(watchlist or []))
+    return Ctx(p, spot, idx, bd, idx_list, rg, list(watchlist or []), rulesmod.load_rules())
 
 
 def _watchlist_codes() -> list:
