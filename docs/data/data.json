@@ -1,7 +1,7 @@
 {
-  "updated_at": "2026-06-17T23:26:56",
+  "updated_at": "2026-06-17T23:42:35",
   "market_open": false,
-  "mode": "fast",
+  "mode": "normal",
   "demo": false,
   "targets": [
     {
@@ -12417,5 +12417,5 @@
       "stale": true
     }
   ],
-  "next_interval_minutes": 15
+  "next_interval_minutes": 60
 }
