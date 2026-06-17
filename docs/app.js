@@ -74,6 +74,9 @@ function render(data, hist) {
   meta.innerHTML = demoTag + `更新 ${data.updated_at} ｜ ${openTxt} ｜ ${modeTxt} ｜ 汇报间隔 ${data.next_interval_minutes ?? "-"} 分钟`;
 
   const cards = document.getElementById("cards");
+  // 关键:重建卡片前先销毁旧 ECharts 实例并清表,否则实例仍指向被删除的旧 DOM → 刷新后图消失
+  Object.values(charts).forEach(c => { try { c.dispose(); } catch (e) {} });
+  for (const k in charts) delete charts[k];
   cards.innerHTML = "";
   (data.targets || []).forEach((t, i) => {
     const m = t.metrics || {};
