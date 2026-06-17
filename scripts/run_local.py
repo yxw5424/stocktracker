@@ -17,6 +17,13 @@ import subprocess
 import sys
 import time
 
+# Windows 控制台默认 cp1252,打印中文会崩;统一切 UTF-8。
+for _s in (sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA = os.path.join(ROOT, "docs", "data", "data.json")
 
