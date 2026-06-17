@@ -5,6 +5,9 @@ REM (start-all.bat is gitignored, so your password is never uploaded.)
 REM NOTE: keep this .bat ASCII-only; cmd mis-parses non-ASCII .bat files.
 cd /d "E:\dev\stcoktracker"
 
+REM free port 8777 if a previous console is still running (avoid bind error)
+for /f "tokens=5" %%a in ('netstat -ano ^| findstr "127.0.0.1:8777" ^| findstr LISTENING') do taskkill /F /PID %%a >nul 2>&1
+
 set STK_PASSWORD=your-access-password
 REM generate a random secret:  python -c "import secrets;print(secrets.token_hex(24))"
 set STK_SECRET=paste-random-hex-here
