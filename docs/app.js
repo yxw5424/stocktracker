@@ -101,6 +101,12 @@ function render(data, hist) {
         (t.alerts && t.alerts.length)
           ? t.alerts.map(a => `<span class="badge ${a.level}">${a.message}</span>`).join("")
           : '<span class="badge calm">无异动</span>'
+      }${
+        (t.rule_hits || []).map(h => {
+          const cls = h.shadow ? "shadow" : (h.fired ? "fired" : "sup");
+          const tag = h.shadow ? "影子" : (h.fired ? "已推" : "抑制");
+          return `<span class="badge rule ${cls}" title="${h.message}">📐 ${h.name}·${tag}</span>`;
+        }).join("")
       }</div>
       <div class="view-toggle">
         <button data-view="intraday" ${hasIntraday ? "" : "disabled"}>分时</button>
@@ -153,6 +159,44 @@ function renderSignals(sigs) {
   });
 }
 
+function renderRules(rules, targets) {
+  const ul = document.getElementById("rules");
+  const hint = document.getElementById("rules-hint");
+  ul.innerHTML = "";
+  if (!rules) { hint.textContent = "（等下次运行刷新后显示）"; return; }
+  if (!rules.length) { hint.textContent = "（未配置；用 /rule \"大白话\" 添加）"; return; }
+  // 汇总本轮各规则命中的标的(区分 已推/影子/抑制)
+  const hitsByRule = {};
+  (targets || []).forEach(t => (t.rule_hits || []).forEach(h => {
+    (hitsByRule[h.rule_id] ||= []).push({ code: t.code, name: t.name, fired: h.fired, shadow: h.shadow });
+  }));
+  const live = rules.filter(r => r.enabled && !r.shadow).length;
+  const shadow = rules.filter(r => r.enabled && r.shadow).length;
+  hint.textContent = `（启用 ${live} · 影子 ${shadow}）`;
+
+  rules.forEach(r => {
+    const tags = [];
+    if (!r.enabled) tags.push('<span class="rtag off">停用</span>');
+    if (r.shadow) tags.push('<span class="rtag shadow">影子</span>');
+    const hits = hitsByRule[r.id] || [];
+    const hitTxt = hits.length
+      ? hits.map(h => `<span class="rhit ${h.shadow ? "shadow" : (h.fired ? "fired" : "sup")}">${h.name}</span>`).join("")
+      : '<span class="rhit none">本轮无命中</span>';
+    const li = document.createElement("li");
+    li.className = "rule-item" + (r.shadow ? " is-shadow" : "");
+    li.innerHTML = `
+      <div class="rule-top">
+        <span class="rule-name">📐 ${r.name}</span>${tags.join("")}
+        <span class="rule-cond">${(r.conditions || []).join(" ＋ ")} <em>(${r.logic})</em></span>
+      </div>
+      <div class="rule-bottom">
+        <span class="rule-nl">${r.raw_nl || ""}</span>
+        <span class="rule-hits">${hitTxt}</span>
+      </div>`;
+    ul.appendChild(li);
+  });
+}
+
 async function load() {
   const [data, hist, market] = await Promise.all([
     getJSON("data/data.json"),
@@ -162,6 +206,7 @@ async function load() {
   render(data, hist || []);
   renderMarket(market);
   renderSignals(market ? market.signals : []);
+  renderRules(data ? data.rules : [], data ? data.targets : []);
 }
 
 window.addEventListener("resize", () => Object.values(charts).forEach(c => c.resize()));

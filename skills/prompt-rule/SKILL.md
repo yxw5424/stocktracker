@@ -43,6 +43,29 @@ description: 把用户用大白话写的 A 股盯盘规则,翻译成可计算的
 2. **核对**:运行 `python -m analyzer.digest`(市场+自选)或 `python -m analyzer.screen --top 50`(全市场),指出当前哪些票接近命中该规则的硬指标。
 3. **降噪建议**:给冷却时间与每日上限,避免刷屏(误报是这类工具的生死线)。
 
+## 四、落地到运行期引擎(rules.yaml)
+
+确认无误后,把规则按 `rules.yaml` 的结构追加进去 —— 运行期由 `analyzer/rules.py` **确定性执行**(无 LLM、毫秒级、可复算),命中会带客观事实推送并显示在看板:
+
+```yaml
+- id: r_xxx
+  name: 规则名
+  raw_nl: "用户原话"
+  scope: ["*"]            # 或 ["600909"]
+  enabled: true
+  shadow: true            # 新规则先影子观察 1~2 天,再改 false 放量
+  logic: AND              # AND / OR
+  conditions:
+    - {indicator: vol_ratio, op: ">=", value: 2.0}
+    - {indicator: price_breakout, op: ">", ref: box_high_20d}
+  noise: {cooldown_sec: 3600, max_alerts_per_day: 2}
+```
+
+- **影子模式**:`shadow: true` 只记录不推送,看板显示"如果开了会推几条",符合 PRD 的灰度上线。
+- **历史回放(PIT 对齐)**:`python -m analyzer.rules --replay <id> --code <代码>` 看这条规则历史触发点与后续收益;
+  `slope/intraday_shape` 等分时级条件日线无法复现,会被**诚实标注并忽略**,绝不假装能回测。
+- 用 `python -m analyzer.rules` 可随时列出全部规则及阈值。
+
 ## 铁律
 
 - 只输出**客观事实**(放量 X 倍、突破近 N 日箱体、高开低走),**绝不输出方向性结论**(会涨 / 见光死 / 该买 / 抄底 / 目标价)。

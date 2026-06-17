@@ -1,0 +1,71 @@
+# ───────────────────────────────────────────────────────────────
+# 提示词规则(硬指标 DSL)—— 用大白话描述盘面,引擎确定性地判断是否命中。
+#
+# 怎么加规则:用 /rule "你的大白话" 让 Claude 帮你翻成下面的结构并回译核对;
+# 或直接照葫芦画瓢加一条。指标只能用封闭词表(见 analyzer/rules.py 顶部说明):
+#   slope accel vol_ratio pct_window pct_day gap amplitude
+#   price_breakout(配 ref: box_high_20d/box_low_20d/box_high_30d…)
+#   intraday_shape(high_open_low_close 高开低走 / surge 加速拉升 / dump 跳水)
+#
+# 字段:
+#   enabled  是否启用
+#   shadow   true=影子模式(只记录不推送,先观察 1~2 天再放量)
+#   scope    作用域:["*"]=所有自选;或 ["600909","603009"] 指定代码
+#   logic    AND / OR
+#   conditions  条件列表;op ∈ >= <= > < == != ;abs:true 取绝对值
+#   noise    降噪(一等公民):cooldown_sec 冷却秒数;max_alerts_per_day 每日上限
+#
+# 铁律:规则只报【客观事实】(放量 X 倍、突破近 N 日箱体、高开低走),
+#       绝不输出方向性结论(会涨/见光死/该买/目标价)。不构成投资建议。
+# ───────────────────────────────────────────────────────────────
+
+rules:
+  # ① 分时加速拉升(纯硬指标,MVP 主力,几乎不需 LLM)
+  - id: r_surge
+    name: 分时加速拉升
+    raw_nl: "分时价格突然加速拉升、并且有涨幅,就提醒我"
+    scope: ["*"]
+    enabled: true
+    shadow: false
+    logic: AND
+    conditions:
+      - {indicator: slope, op: ">=", value: 4.0}        # 斜率 ≥ 4 %/小时
+      - {indicator: pct_window, op: ">=", value: 3.0}   # 区间涨幅 ≥ 3%
+    noise: {cooldown_sec: 1800, max_alerts_per_day: 5}
+
+  # ② 放量突破平台(先影子观察:量比与突破都要满足才算)
+  - id: r_volbreak
+    name: 放量突破平台
+    raw_nl: "缩量盘很久后突然放量、并突破近 20 日箱体,提醒我留意(只报客观事实)"
+    scope: ["*"]
+    enabled: true
+    shadow: true
+    logic: AND
+    conditions:
+      - {indicator: vol_ratio, op: ">=", value: 2.0}
+      - {indicator: price_breakout, op: ">", ref: box_high_20d}
+    noise: {cooldown_sec: 3600, max_alerts_per_day: 2}
+
+  # ③ 高开低走(仅客观形态,不预测方向)—— 影子观察
+  - id: r_high_open_low_close
+    name: 高开低走
+    raw_nl: "当天高开低走就提醒我留意"
+    scope: ["*"]
+    enabled: true
+    shadow: true
+    logic: AND
+    conditions:
+      - {indicator: intraday_shape, op: "==", value: high_open_low_close}
+    noise: {cooldown_sec: 3600, max_alerts_per_day: 2}
+
+  # ④ 分时加速形态(纯形态,影子记录)—— 与 ① 互补:① 看斜率量价,这条看形态
+  - id: r_shape_surge
+    name: 分时加速形态
+    raw_nl: "分时走出加速拉升形态就记录一下(影子观察)"
+    scope: ["*"]
+    enabled: true
+    shadow: true
+    logic: AND
+    conditions:
+      - {indicator: intraday_shape, op: "==", value: surge}
+    noise: {cooldown_sec: 1800, max_alerts_per_day: 8}

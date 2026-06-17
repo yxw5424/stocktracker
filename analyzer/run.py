@@ -27,6 +27,7 @@ for _stream in (sys.stdout, sys.stderr):
 from . import analyze as analyzemod
 from . import fetch as fetchmod
 from . import notify as notifymod
+from . import rules as rulesmod
 from . import state as statemod
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -59,6 +60,7 @@ def main() -> None:
     args = ap.parse_args()
 
     cfg = load_cfg()
+    rules_cfg = rulesmod.load_rules(os.path.join(ROOT, "rules.yaml"))
     tz = ZoneInfo(cfg["market"]["timezone"])
     now = dt.datetime.now(tz).replace(tzinfo=None)  # 用本地 naive 时间统一比较
 
@@ -80,6 +82,7 @@ def main() -> None:
 
     any_surge = False
     pending = []  # [(target, metrics, alerts)]
+    live_rule_hits = []  # [(target, rule, message, hit_dict)] —— 非影子规则,待按规则冷却推送
 
     for target in cfg["targets"]:
         code = target["code"]
@@ -127,9 +130,28 @@ def main() -> None:
                 for _, r in daily_df.iterrows()
             ]
 
+        # ── 提示词规则引擎(硬指标 DSL):确定性命中判断 ──
+        feat = rulesmod.build_features(metrics, daily_df, intraday_df)
+        rule_hits = []
+        for rule in rules_cfg:
+            if not rule.get("enabled", True) or not rulesmod.scope_match(rule, code):
+                continue
+            ev = rulesmod.eval_rule(rule, feat)
+            if not ev["hit"]:
+                continue
+            shadow = bool(rule.get("shadow", False))
+            hit = {"rule_id": rule["id"], "name": rule.get("name", rule["id"]),
+                   "level": rule.get("level", "high"), "shadow": shadow,
+                   "message": rulesmod.hit_message(rule, ev), "fired": False}
+            rule_hits.append(hit)
+            if shadow:
+                rulesmod.rule_record_shadow(state, rule, code, now)  # 只记录不推送
+            else:
+                live_rule_hits.append((target, rule, hit["message"], hit))
+
         snapshot["targets"].append({
             "code": code, "name": target.get("name", code),
-            "metrics": metrics, "alerts": alerts, "views": views,
+            "metrics": metrics, "alerts": alerts, "views": views, "rule_hits": rule_hits,
         })
         if alerts:
             pending.append((target, metrics, alerts))
@@ -146,6 +168,7 @@ def main() -> None:
     mode, interval = statemod.decide_cadence(state, cfg, any_surge, now)
     snapshot["mode"] = mode
     snapshot["next_interval_minutes"] = interval
+    snapshot["rules"] = rulesmod.rule_summary(rules_cfg)  # 看板展示规则清单(含阈值)
 
     # ── 去重 + 按节奏决定是否推送 ──
     dedup_min = int(cfg["cadence"]["alert_dedup_minutes"])
@@ -167,6 +190,22 @@ def main() -> None:
         sent = notifymod.send(title, content)
         notified.append({"code": code, "alerts": [a["message"] for a in fresh], "sent": sent})
         print(f"[alert] {code}: {[a['message'] for a in fresh]} -> {sent}")
+
+    # ── 规则命中推送:走每条规则自己的冷却 / 每日上限,独立于全局汇报节奏 ──
+    for target, rule, msg, hit in live_rule_hits:
+        code = target["code"]
+        ok, why = rulesmod.rule_gate(state, rule, code, now)
+        if not ok:
+            hit["suppressed"] = why  # cooldown / daily_cap —— 看板可显示"已抑制"
+            continue
+        rulesmod.rule_record_fire(state, rule, code, now)
+        hit["fired"] = True
+        title = f"📐 {target.get('name', code)} {code} 规则命中"
+        content = "\n".join([f"【规则命中·非投资建议】{msg}", "",
+                             "(仅客观盘面,不构成投资建议,不自动下单)"])
+        sent = notifymod.send(title, content)
+        notified.append({"code": code, "alerts": [msg], "sent": sent})
+        print(f"[rule] {code} {rule['id']}: {msg} -> {sent}")
 
     # ── 写快照 ──
     os.makedirs(DATA_DIR, exist_ok=True)
@@ -209,7 +248,9 @@ def main() -> None:
         json.dump(history, f, ensure_ascii=False, indent=2)
 
     statemod.save_state(state_path, state)
-    print(f"[done] mode={mode} interval={interval}m surge={any_surge} notified={len(notified)}")
+    rule_fired = sum(1 for _, _, _, h in live_rule_hits if h.get("fired"))
+    print(f"[done] mode={mode} interval={interval}m surge={any_surge} "
+          f"notified={len(notified)} rules_fired={rule_fired}")
 
 
 if __name__ == "__main__":

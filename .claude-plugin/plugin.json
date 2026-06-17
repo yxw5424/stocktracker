@@ -1,8 +1,8 @@
 {
   "name": "stocktracker",
-  "version": "0.1.0",
-  "description": "A股多维实时分析:全市场异动扫描、市场态势(宽度/情绪/形势)、自选盯盘、信号轻量回测、自然语言提示词规则。仅客观信息,不构成投资建议。",
-  "keywords": ["stock", "A股", "盯盘", "异动", "量化", "akshare"],
+  "version": "0.2.0",
+  "description": "A股多维实时分析:全市场异动扫描、市场态势(宽度/情绪/形势)、自选盯盘、信号轻量回测、自然语言提示词规则引擎(硬指标 DSL + 影子模式 + PIT 历史回放)。仅客观信息,不构成投资建议。",
+  "keywords": ["stock", "A股", "盯盘", "异动", "量化", "akshare", "规则引擎", "回测"],
   "author": { "name": "yxw5424" },
   "repository": "https://github.com/yxw5424/stocktracker"
 }

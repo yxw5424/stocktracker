@@ -14,6 +14,7 @@
 [定时触发] → analyzer.run
    ├─ fetch.py     akshare 抓分钟K线(--demo 用合成数据)
    ├─ analyze.py   算 涨跌幅 / 斜率 / 斜率加速度 / 量比 / 突破
+   ├─ rules.py     提示词规则引擎:封闭词表硬指标 DSL 确定性命中 + 按规则冷却/每日上限 + 影子模式
    ├─ state.py     自适应节奏(斜率激增→高频)+ 告警去重
    ├─ notify.py    推送(PushPlus/Server酱/Bark/Telegram/邮件,按需开)
    └─ 写 docs/data/*.json
@@ -71,12 +72,33 @@ python scripts/run_local.py --demo      # 离线演示
 
 ---
 
+## 提示词规则引擎(`rules.yaml`)
+
+用大白话写盯盘条件,引擎**确定性**地判断是否命中(无 LLM、毫秒级、可复算)——这是 PRD 的 P0 核心:
+"把聪明放配置期,把确定放运行期"。
+
+```bash
+python -m analyzer.rules                                   # 列出已配置规则(含阈值)
+python -m analyzer.rules --replay r_volbreak --code 600909 # 历史回放该规则(PIT 对齐)
+python -m analyzer.rules --replay r_surge --code 600909 --demo  # 离线合成日线回放
+```
+
+- **封闭词表硬指标**:`slope`(斜率)`accel` `vol_ratio`(量比)`pct_window` `pct_day` `gap`(跳空)
+  `amplitude`(振幅)`price_breakout`(突破箱体)`intraday_shape`(高开低走 / 加速 / 跳水)。
+- **降噪一等公民**:每条规则自带 `cooldown_sec` 冷却 + `max_alerts_per_day` 每日上限。
+- **影子模式**(`shadow: true`):只记录不推送,先观察 1~2 天再放量;看板会显示影子命中。
+- **历史回放(PIT 对齐)**:每天只用当天之前的数据算特征,防前视偏差;`slope/分时形态` 等分时级条件
+  日线无法复现,会被**诚实标注并忽略**。
+- **铁律**:只报客观事实(放量 X 倍、突破近 N 日箱体、高开低走),**绝不输出方向性结论**(会涨/见光死/该买)。
+- 配规则最省心的方式:在 Claude Code 里用 `/rule "你的大白话"`,自动拆解 + 回译 + 落地;`/rules` 查看/回放。
+
 ## 改配置(`config.yaml`)
 
 - `targets`:加减监控的股票;`levels` 填关键价位线即可启用突破告警。
-- `triggers`:四类触发器(涨跌幅 / 斜率激增 / 放量 / 突破)各自开关与阈值。
+- `triggers`:四类内置触发器(涨跌幅 / 斜率激增 / 放量 / 突破)各自开关与阈值。
 - `cadence`:正常/高频间隔、高频持续时长、告警去重窗口。
 - `analysis.bar_period`:分钟周期(1/5/15/30/60)。
+- 自定义规则放 `rules.yaml`(见上),与内置触发器并行。
 
 ---
 
@@ -93,10 +115,12 @@ python scripts/run_local.py --demo      # 离线演示
 ## 目录
 
 ```
-config.yaml                 监控配置(改这里)
+config.yaml                 监控配置(标的/阈值/节奏/渠道)
+rules.yaml                  提示词规则(硬指标 DSL,用 /rule 维护)
 requirements.txt
 analyzer/                   分析与推送核心
-  fetch.py  analyze.py  state.py  notify.py  run.py
+  fetch.py  analyze.py  rules.py  state.py  notify.py  run.py
+  market.py  signals.py  digest.py  screen.py  backtest.py  providers.py
 docs/                       GitHub Pages 网站(看板)
   index.html  app.js  style.css  data/(运行时生成的 json)
 scripts/run_local.py        本地常驻(真·动态间隔)
