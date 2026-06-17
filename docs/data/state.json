@@ -2,20 +2,20 @@
   "targets": {
     "600909": {
       "last_alert_by_type": {
-        "pct_change": "2026-06-17T17:01:04.799045",
-        "slope_surge": "2026-06-17T17:01:04.799045"
+        "pct_change": "2026-06-17T17:16:05.295721",
+        "slope_surge": "2026-06-17T17:16:05.295721"
       },
-      "last_report": "2026-06-17T17:01:04.799045"
+      "last_report": "2026-06-17T17:16:05.295721"
     },
     "603009": {
       "last_alert_by_type": {
-        "pct_change": "2026-06-17T17:01:04.799045",
-        "slope_surge": "2026-06-17T17:01:04.799045"
+        "pct_change": "2026-06-17T17:16:05.295721",
+        "slope_surge": "2026-06-17T17:16:05.295721"
       },
-      "last_report": "2026-06-17T17:01:04.799045"
+      "last_report": "2026-06-17T17:16:05.295721"
     }
   },
-  "fast_mode_until": "2026-06-17T17:46:04.799045",
+  "fast_mode_until": "2026-06-17T18:01:05.295721",
   "fetch_fail_streak": 0,
   "fetch_cooldown_until": null
 }
