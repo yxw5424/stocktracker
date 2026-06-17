@@ -1,6 +1,6 @@
 {
-  "updated_at": "2026-06-17T11:16:47",
-  "market_open": true,
+  "updated_at": "2026-06-17T12:18:44",
+  "market_open": false,
   "mode": "normal",
   "demo": false,
   "targets": [
@@ -1399,7 +1399,8 @@
             "l": 7.89
           }
         ]
-      }
+      },
+      "stale": true
     },
     {
       "code": "603009",
@@ -2796,7 +2797,8 @@
             "l": 41.86
           }
         ]
-      }
+      },
+      "stale": true
     }
   ],
   "next_interval_minutes": 60
