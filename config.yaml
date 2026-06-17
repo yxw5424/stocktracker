@@ -9,7 +9,6 @@ targets:
   - code: "603009"
     name: "北特科技"
     levels: []
-
 market:
   timezone: "Asia/Shanghai"
   sessions:             # A股交易时段(本地时间),非交易时段不取数

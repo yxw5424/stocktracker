@@ -9,24 +9,64 @@
 </head>
 <body>
   <header>
-    <h1>📈 实时异动监控</h1>
+    <h1>📈 实时异动监控 <span id="local-badge" class="local-badge" hidden>● 本地控制台</span></h1>
     <div id="meta" class="meta">加载中…</div>
   </header>
 
-  <section id="market" class="market"></section>
+  <nav id="nav" class="nav" hidden>
+    <button data-view="board" class="active">看板</button>
+    <button data-view="console">控制台</button>
+  </nav>
 
-  <section class="signals-wrap">
-    <h2>多维信号 · 已筛选</h2>
-    <ul id="signals" class="signals"></ul>
-  </section>
+  <div id="board">
+    <section id="market" class="market"></section>
 
-  <h2 class="section-title">自选盯盘</h2>
-  <main id="cards" class="cards"></main>
+    <section class="signals-wrap">
+      <h2>多维信号 · 已筛选</h2>
+      <ul id="signals" class="signals"></ul>
+    </section>
 
-  <section class="history-wrap">
-    <h2>告警历史</h2>
-    <ul id="history" class="history"></ul>
-  </section>
+    <h2 class="section-title">自选盯盘</h2>
+    <main id="cards" class="cards"></main>
+
+    <section class="history-wrap">
+      <h2>告警历史</h2>
+      <ul id="history" class="history"></ul>
+    </section>
+  </div>
+
+  <div id="console" hidden>
+    <section class="panel">
+      <h3>自选管理</h3>
+      <div class="row">
+        <input id="wl-code" class="field" placeholder="6 位代码,如 600909" maxlength="6">
+        <input id="wl-name" class="field" placeholder="名称(可选)">
+        <button id="wl-add" class="btn btn-primary">加入自选</button>
+      </div>
+      <ul id="wl-list" class="ctl-list"></ul>
+    </section>
+
+    <section class="panel">
+      <h3>规则制定器 <small>说人话,自动拆成硬指标(可改)</small></h3>
+      <textarea id="rule-nl" class="field area" rows="2" placeholder="例:自选股放量、斜率突然变陡就提醒我"></textarea>
+      <div class="row">
+        <button id="rule-parse" class="btn btn-primary">解析成规则 →</button>
+        <span class="hint">复杂/否定/组合规则,建议用 Claude Code 的 /rule(完整 LLM 解析)</span>
+      </div>
+      <div id="rule-draft" class="rule-draft" hidden></div>
+      <h4>已有规则</h4>
+      <ul id="rule-list" class="ctl-list"></ul>
+    </section>
+
+    <section class="panel">
+      <h3>通知渠道</h3>
+      <ul id="notify-list" class="ctl-list"></ul>
+      <button id="notify-test" class="btn">发送测试推送</button>
+    </section>
+
+    <p class="console-note">所有操作只写本地 config.yaml / rules.yaml(写前自动备份),引擎下一轮生效。
+       不替你下单、不构成投资建议。</p>
+  </div>
 
   <footer>
     <p>数据来自公开接口,可能延迟 / 缺失 / 失败;本页为信息提醒,
@@ -34,5 +74,6 @@
   </footer>
 
   <script src="app.js"></script>
+  <script src="console.js"></script>
 </body>
 </html>

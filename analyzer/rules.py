@@ -23,6 +23,63 @@ _OPS = {
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
+def parse_nl(text: str) -> dict:
+    """把大白话规则做【基础关键词解析】成硬指标 DSL 草稿(供前端 chips 编辑确认)。
+
+    这是离线、确定性的关键词解析,覆盖常见盯盘话术;复杂/否定/时序/组合规则
+    请用 Claude Code 的 /rule(完整 LLM 解析)。解析结果【必须】回前端逐条可改。
+    """
+    import re
+
+    t = text or ""
+
+    def _num(anchor: str, default: float) -> float:
+        m = re.search(anchor + r"[^0-9]{0,6}(\d+(?:\.\d+)?)", t)
+        if m:
+            return float(m.group(1))
+        m = re.search(r"(\d+(?:\.\d+)?)\s*%", t)
+        return float(m.group(1)) if m else default
+
+    conds: list[dict] = []
+    unsupported: list[str] = []
+    if any(k in t for k in ["放量", "量比", "巨量", "天量", "爆量"]):
+        conds.append({"indicator": "volume_ratio", "op": ">=", "value": 2.0})
+    if any(k in t for k in ["斜率", "变陡", "激增", "加速", "陡", "拉升", "急拉"]):
+        conds.append({"indicator": "slope", "op": ">=", "value": 4.0})
+    if "涨停" in t:
+        conds.append({"indicator": "pct_change", "op": ">=", "value": 9.7})
+    elif any(k in t for k in ["大涨", "涨幅", "涨超", "猛涨", "暴涨"]) or ("涨" in t and "%" in t):
+        conds.append({"indicator": "pct_change", "op": ">=", "value": _num("涨", 5.0)})
+    if any(k in t for k in ["跳水", "大跌", "跌超", "急跌", "闪崩", "跳水"]) or ("跌" in t and "%" in t):
+        conds.append({"indicator": "pct_change", "op": "<=", "value": -_num("跌", 3.0)})
+    if "振幅" in t:
+        conds.append({"indicator": "amplitude", "op": ">=", "value": 5.0})
+    if any(k in t for k in ["成交额", "成交超", "放出"]):
+        conds.append({"indicator": "amount", "op": ">=", "value": 300000000})
+    if any(k in t for k in ["突破", "新高", "破位", "破前高"]):
+        unsupported.append("突破/新高:引擎暂未实现该硬指标,可用 Claude /rule 或等后续版本")
+
+    seen, uniq = set(), []
+    for c in conds:
+        if c["indicator"] in seen:
+            continue
+        seen.add(c["indicator"])
+        uniq.append(c)
+    conds = uniq
+
+    uses_intraday = any(c["indicator"] in ("slope", "volume_ratio") for c in conds)
+    scope = "watchlist" if (uses_intraday or "自选" in t) else "all"
+    return {
+        "raw_nl": text,
+        "name": (text.strip()[:14] or "新规则"),
+        "scope": scope,
+        "logic": "AND",
+        "conditions": conds,
+        "cooldown_min": 30,
+        "unsupported": unsupported,
+    }
+
+
 def load_rules(path: str | None = None) -> list[dict]:
     path = path or os.path.join(ROOT, "rules.yaml")
     if not os.path.exists(path):

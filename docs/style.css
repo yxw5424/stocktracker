@@ -89,3 +89,73 @@ h2 { font-size: 16px; color: var(--muted); }
   color: var(--txt); font-variant-numeric: tabular-nums;
 }
 footer { padding: 16px 24px 40px; color: var(--muted); font-size: 12px; line-height: 1.6; }
+
+/* ───────── 本地控制台 ───────── */
+.local-badge { font-size: 12px; color: #7fe3c4; font-weight: 500; }
+.nav { display: flex; gap: 8px; padding: 4px 24px 0; }
+.nav button {
+  font-size: 14px; padding: 6px 16px; border-radius: 8px 8px 0 0; cursor: pointer;
+  background: transparent; color: var(--muted); border: 1px solid transparent; border-bottom: none;
+}
+.nav button.active { background: var(--card); color: var(--txt); border-color: var(--line); }
+#console { padding: 8px 24px 24px; }
+.panel {
+  background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+  padding: 16px 18px; margin-bottom: 16px; max-width: 760px;
+}
+.panel h3 { margin: 0 0 12px; font-size: 16px; }
+.panel h3 small { color: var(--muted); font-weight: 400; font-size: 12px; }
+.panel h4 { color: var(--muted); font-weight: 400; margin: 16px 0 6px; font-size: 13px; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.field {
+  background: #0c1220; border: 1px solid #33405f; color: var(--txt);
+  border-radius: 8px; padding: 7px 10px; font-size: 14px; outline: none;
+}
+.field:focus { border-color: #4a8cff; }
+.field.area { width: 100%; resize: vertical; font-family: inherit; }
+.field.num { width: 72px; }
+#wl-code { width: 160px; } #wl-name { width: 140px; }
+.btn {
+  font-size: 14px; padding: 7px 14px; border-radius: 8px; cursor: pointer;
+  background: #21304d; color: #cdd8ee; border: 1px solid var(--line);
+}
+.btn:hover { border-color: #4a8cff; }
+.btn-primary { background: #4a8cff; color: #06122b; border-color: #4a8cff; font-weight: 600; }
+.btn-primary:hover { background: #6aa3ff; }
+.btn-ghost { background: transparent; }
+.hint { color: var(--muted); font-size: 12px; }
+.ctl-list { list-style: none; padding: 0; margin: 10px 0 0; }
+.ctl-list li {
+  display: flex; justify-content: space-between; align-items: center; gap: 10px;
+  padding: 8px 10px; border-bottom: 1px solid var(--line); font-size: 13px;
+}
+.ctl-list li small { color: var(--muted); }
+.ctl-list .x { background: transparent; border: none; color: var(--muted); cursor: pointer; font-size: 14px; }
+.ctl-list .x:hover { color: var(--up); }
+.badge-scope { background: #21304d; padding: 1px 7px; border-radius: 6px; }
+.rule-draft { margin: 12px 0; padding: 12px; border: 1px dashed #4a8cff; border-radius: 10px; background: #0e1830; }
+.draft-head { color: var(--high); font-size: 13px; margin-bottom: 8px; }
+.draft-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0; font-size: 13px; color: var(--muted); }
+.draft-row select, .draft-row input { background: #0c1220; border: 1px solid #33405f; color: var(--txt); border-radius: 6px; padding: 4px 7px; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+.chip {
+  display: inline-flex; align-items: center; gap: 4px; background: #21304d;
+  border: 1px solid #33405f; border-radius: 999px; padding: 4px 6px 4px 10px;
+}
+.chip select, .chip input {
+  background: #0c1220; border: 1px solid #33405f; color: var(--txt);
+  border-radius: 6px; padding: 3px 6px; font-size: 13px;
+}
+.chip input { width: 70px; }
+.chip .c-x { background: transparent; border: none; color: var(--muted); cursor: pointer; }
+.chip .c-x:hover { color: var(--up); }
+.warn { color: var(--high); font-size: 12px; margin: 6px 0; }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+.dot.on { background: #18b89a; } .dot.off { background: #50607f; }
+.console-note { color: var(--muted); font-size: 12px; max-width: 760px; line-height: 1.6; }
+#toast { position: fixed; right: 18px; bottom: 18px; display: flex; flex-direction: column; gap: 8px; z-index: 999; }
+.toast {
+  padding: 10px 16px; border-radius: 10px; font-size: 13px; color: #eafff8;
+  background: #1d3a33; border: 1px solid #2a5a4c; box-shadow: 0 4px 16px rgba(0,0,0,.4);
+}
+.toast.err { background: #3a1d22; border-color: #5a2a30; color: #ffd9dd; }
