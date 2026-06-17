@@ -26,6 +26,11 @@ def run_once(demo: bool) -> None:
     subprocess.run(cmd, cwd=ROOT, check=False)
 
 
+def run_digest() -> None:
+    """多维信号引擎:刷新市场态势 + 全市场异动 + 自选信号(写 market.json)。"""
+    subprocess.run([sys.executable, "-m", "analyzer.digest", "--json"], cwd=ROOT, check=False)
+
+
 def git_push() -> None:
     """把最新数据提交并推到 GitHub。用系统默认网络(含代理),以便正常访问 github。"""
     subprocess.run(["git", "add", "docs/data"], cwd=ROOT, check=False)
@@ -54,6 +59,8 @@ def main() -> None:
     try:
         while True:
             run_once(demo)
+            if not demo:
+                run_digest()
             if push:
                 git_push()
             sl = next_sleep_seconds()

@@ -1,0 +1,216 @@
+{
+  "regime": {
+    "money_effect": 30,
+    "label": "普跌 · 亏钱效应",
+    "tone": "risk_off",
+    "up_ratio": 0.262,
+    "net_limit": 23,
+    "index_avg_pct": -0.32
+  },
+  "breadth": {
+    "total": 5447,
+    "adv": 1400,
+    "dec": 3943,
+    "flat": 104,
+    "up_ratio": 0.262,
+    "limit_up": 24,
+    "limit_down": 1,
+    "up5": 129,
+    "down5": 32,
+    "median_pct": -0.87,
+    "mean_pct": -0.52,
+    "total_amount_yi": 6399
+  },
+  "indices": [
+    {
+      "code": "sh000001",
+      "name": "上证指数",
+      "price": 4083.1,
+      "pct": -0.21
+    },
+    {
+      "code": "sz399001",
+      "name": "深证成指",
+      "price": 15696.95,
+      "pct": 0.14
+    },
+    {
+      "code": "sz399006",
+      "name": "创业板指",
+      "price": 4087.72,
+      "pct": -0.37
+    },
+    {
+      "code": "sh000688",
+      "name": "科创50",
+      "price": 1738.55,
+      "pct": -1.13
+    },
+    {
+      "code": "sh000300",
+      "name": "沪深300",
+      "price": 4883.54,
+      "pct": -0.01
+    }
+  ],
+  "signals": [
+    {
+      "dim": "stock",
+      "kind": "anomaly",
+      "subject": "sz301150",
+      "level": "notice",
+      "score": 140.0,
+      "message": "中一科技 sz301150 +18.49% 振幅21.8% 异动分140",
+      "data": {
+        "pct": 18.492,
+        "amplitude": 21.794166208035215,
+        "amount": 1058728638.0
+      }
+    },
+    {
+      "dim": "stock",
+      "kind": "anomaly",
+      "subject": "sz300735",
+      "level": "notice",
+      "score": 138.2,
+      "message": "光弘科技 sz300735 +19.99% 振幅18.9% 异动分138",
+      "data": {
+        "pct": 19.99,
+        "amplitude": 18.87976822790922,
+        "amount": 737576034.0
+      }
+    },
+    {
+      "dim": "stock",
+      "kind": "anomaly",
+      "subject": "sh688079",
+      "level": "notice",
+      "score": 135.2,
+      "message": "美迪凯 sh688079 +19.98% 振幅16.4% 异动分135",
+      "data": {
+        "pct": 19.985,
+        "amplitude": 16.416228399699477,
+        "amount": 437392639.0
+      }
+    },
+    {
+      "dim": "stock",
+      "kind": "anomaly",
+      "subject": "bj920178",
+      "level": "notice",
+      "score": 120.1,
+      "message": "锐翔智能 bj920178 +17.75% 振幅10.8% 异动分120",
+      "data": {
+        "pct": 17.75,
+        "amplitude": 10.830686946347994,
+        "amount": 245972365.0
+      }
+    },
+    {
+      "dim": "stock",
+      "kind": "anomaly",
+      "subject": "sz300088",
+      "level": "notice",
+      "score": 111.7,
+      "message": "长信科技 sz300088 +16.12% 振幅9.4% 异动分112",
+      "data": {
+        "pct": 16.118,
+        "amplitude": 9.421112372304199,
+        "amount": 2306688672.0
+      }
+    },
+    {
+      "dim": "stock",
+      "kind": "anomaly",
+      "subject": "sz301303",
+      "level": "notice",
+      "score": 106.4,
+      "message": "真兰仪表 sz301303 +13.00% 振幅18.2% 异动分106",
+      "data": {
+        "pct": 13.001,
+        "amplitude": 18.17621688231669,
+        "amount": 230706812.0
+      }
+    },
+    {
+      "dim": "stock",
+      "kind": "anomaly",
+      "subject": "sz300196",
+      "level": "notice",
+      "score": 106.2,
+      "message": "长海股份 sz300196 +12.44% 振幅16.7% 异动分106",
+      "data": {
+        "pct": 12.442,
+        "amplitude": 16.684491978609625,
+        "amount": 666328677.0
+      }
+    },
+    {
+      "dim": "stock",
+      "kind": "anomaly",
+      "subject": "bj920438",
+      "level": "notice",
+      "score": 104.0,
+      "message": "戈碧迦 bj920438 +10.28% 振幅20.4% 异动分104",
+      "data": {
+        "pct": 10.28,
+        "amplitude": 20.406288280930987,
+        "amount": 512846114.0
+      }
+    },
+    {
+      "dim": "watchlist",
+      "kind": "quote",
+      "subject": "sh600909",
+      "level": "high",
+      "score": 87.163,
+      "message": "⭐华安证券 sh600909 +5.72% 现价8.87",
+      "data": {
+        "pct": 5.721,
+        "price": 8.87
+      }
+    },
+    {
+      "dim": "watchlist",
+      "kind": "quote",
+      "subject": "sh603009",
+      "level": "info",
+      "score": 74.002,
+      "message": "⭐北特科技 sh603009 -1.33% 现价42.89",
+      "data": {
+        "pct": -1.334,
+        "price": 42.89
+      }
+    },
+    {
+      "dim": "market",
+      "kind": "regime",
+      "subject": "MARKET",
+      "level": "high",
+      "score": 61.6,
+      "message": "市场形势:普跌 · 亏钱效应(赚钱效应 30/100;涨1400/跌3943,涨停24/跌停1)",
+      "data": {
+        "money_effect": 30,
+        "label": "普跌 · 亏钱效应",
+        "tone": "risk_off",
+        "up_ratio": 0.262,
+        "net_limit": 23,
+        "index_avg_pct": -0.32
+      }
+    },
+    {
+      "dim": "market",
+      "kind": "index",
+      "subject": "sh000688",
+      "level": "notice",
+      "score": 44.519999999999996,
+      "message": "科创50 -1.13%",
+      "data": {
+        "code": "sh000688",
+        "name": "科创50",
+        "price": 1738.55,
+        "pct": -1.13
+      }
+    }
+  ]
+}
