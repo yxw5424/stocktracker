@@ -10,13 +10,16 @@ from __future__ import annotations
 
 import os
 import re
+import secrets
 import shutil
 import sys
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from ruamel.yaml import YAML
+from starlette.middleware.sessions import SessionMiddleware
 
 for _s in (sys.stdout, sys.stderr):
     try:
@@ -57,6 +60,44 @@ def _slug(name: str) -> str:
 
 
 app = FastAPI(title="stocktracker console")
+
+# ── 登录鉴权 ──
+# 设了环境变量 STK_PASSWORD 才启用登录(用于把控制台安全地暴露给小范围的人)。
+# 不设 = 本地无密码模式(只绑 127.0.0.1,仅自己用)。读/看板不拦,只拦"写操作"。
+PASSWORD = os.getenv("STK_PASSWORD", "")
+SECRET = os.getenv("STK_SECRET") or secrets.token_hex(16)
+
+
+@app.middleware("http")
+async def _gate_writes(request: Request, call_next):
+    if PASSWORD and request.method in ("POST", "PUT", "PATCH", "DELETE") and request.url.path != "/api/login":
+        if not request.session.get("auth"):
+            return JSONResponse({"detail": "需要登录后才能操作"}, status_code=401)
+    return await call_next(request)
+
+
+app.add_middleware(SessionMiddleware, secret_key=SECRET, same_site="lax", max_age=7 * 24 * 3600)
+
+
+@app.get("/api/me")
+def me(request: Request):
+    return {"auth_required": bool(PASSWORD), "authed": (not PASSWORD) or bool(request.session.get("auth"))}
+
+
+@app.post("/api/login")
+def login(request: Request, payload: dict):
+    if not PASSWORD:
+        return {"ok": True}
+    if secrets.compare_digest(str(payload.get("password", "")), PASSWORD):
+        request.session["auth"] = True
+        return {"ok": True}
+    raise HTTPException(401, "密码错误")
+
+
+@app.post("/api/logout")
+def logout(request: Request):
+    request.session.clear()
+    return {"ok": True}
 
 
 @app.get("/api/ping")

@@ -159,3 +159,7 @@ footer { padding: 16px 24px 40px; color: var(--muted); font-size: 12px; line-hei
   background: #1d3a33; border: 1px solid #2a5a4c; box-shadow: 0 4px 16px rgba(0,0,0,.4);
 }
 .toast.err { background: #3a1d22; border-color: #5a2a30; color: #ffd9dd; }
+#login-overlay { position: fixed; inset: 0; background: var(--bg); display: flex; align-items: center; justify-content: center; z-index: 1000; }
+.login-box { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 28px 32px; display: flex; flex-direction: column; gap: 12px; width: 280px; }
+.login-box h3 { margin: 0; }
+.login-box .field { width: 100%; }

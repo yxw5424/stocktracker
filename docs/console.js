@@ -177,18 +177,47 @@ async function testNotify() {
 }
 
 // ───────── 启动 ─────────
-async function initConsole() {
-  try {
-    const r = await fetch("/api/ping");
-    if (!r.ok) return;
-  } catch (e) { return; }   // 非本地(Pages)→ 不启用控制台
-
+function mountConsole() {
   document.getElementById("nav").hidden = false;
   document.querySelectorAll("#nav button").forEach(b => b.addEventListener("click", () => switchTab(b.dataset.view)));
   document.getElementById("wl-add").addEventListener("click", addWatch);
   document.getElementById("rule-parse").addEventListener("click", parseRule);
   document.getElementById("notify-test").addEventListener("click", testNotify);
   loadWatchlist(); loadRules(); loadNotify();
+}
+
+function showLogin() {
+  const d = document.createElement("div");
+  d.id = "login-overlay";
+  d.innerHTML = `<div class="login-box">
+      <h3>📈 登录</h3>
+      <input id="login-pw" type="password" class="field" placeholder="访问密码" autofocus>
+      <button id="login-btn" class="btn btn-primary">进入控制台</button>
+      <div id="login-err" class="warn"></div>
+      <div class="hint">看板可直接浏览;操作需登录。</div>
+    </div>`;
+  document.body.appendChild(d);
+  const go = async () => {
+    try {
+      await api("/login", { method: "POST", body: JSON.stringify({ password: document.getElementById("login-pw").value }) });
+      d.remove();
+      mountConsole();
+    } catch (e) { document.getElementById("login-err").textContent = "密码错误"; }
+  };
+  document.getElementById("login-btn").addEventListener("click", go);
+  document.getElementById("login-pw").addEventListener("keydown", e => { if (e.key === "Enter") go(); });
+}
+
+async function initConsole() {
+  try {
+    const r = await fetch("/api/ping");
+    if (!r.ok) return;
+  } catch (e) { return; }   // 非本地/无后端(Pages)→ 不启用控制台
+
+  let me = { auth_required: false, authed: true };
+  try { me = await api("/me"); } catch (e) {}
+  if (me.auth_required && !me.authed) showLogin();   // 需要登录 → 弹密码框
+  else mountConsole();
 }
 
 initConsole();
