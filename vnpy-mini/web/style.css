@@ -1,26 +1,30 @@
-/* vnpy-mini — minimalist 风格
-   单色为主 + 一个克制的强调色，留白充足，无阴影/无渐变，细边框。 */
+/* vnpy-mini — minimalist 风格：黑白为底 + 蓝色为唯一强调色。
+   留白充足，无渐变、几乎无阴影，细边框。 */
 
 :root {
-  --bg:        #fafaf9;
+  --bg:        #ffffff;
   --surface:   #ffffff;
-  --line:      #ececea;
-  --ink:       #1a1a18;
-  --muted:     #9b9b96;
-  --accent:    #2f6f5e;   /* 沉静的墨绿，作唯一强调色 */
-  --up:        #c0392b;   /* A股习惯：红涨 */
-  --down:      #1e8449;   /* 绿跌 */
+  --line:      #ebebeb;
+  --ink:       #0f0f10;
+  --muted:     #9a9aa0;
+  --accent:    #2563eb;   /* 蓝 —— 唯一强调色 */
+  --accent-sub:#eef3ff;   /* 蓝的极浅底 */
+  --up:        #2563eb;   /* 盈利 / 多 -> 蓝 */
+  --down:      #6b7280;   /* 亏损 / 空 -> 中性灰（保持黑白蓝基调）*/
   --radius:    10px;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg:      #111110;
-    --surface: #1a1a18;
-    --line:    #2a2a27;
-    --ink:     #ededea;
-    --muted:   #76766f;
-    --accent:  #4f9d88;
+    --bg:        #0b0c0e;
+    --surface:   #141518;
+    --line:      #25272c;
+    --ink:       #f1f1f3;
+    --muted:     #6a6c73;
+    --accent:    #4f86ff;
+    --accent-sub:#152034;
+    --up:        #4f86ff;
+    --down:      #8a8d96;
   }
 }
 
@@ -47,12 +51,12 @@ html, body {
 .status { display: flex; align-items: center; gap: 12px; }
 .badge {
   font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
-  color: var(--muted); border: 1px solid var(--line);
+  color: var(--accent); background: var(--accent-sub);
   padding: 3px 8px; border-radius: 6px;
 }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); transition: background .3s; }
 .dot.on { background: var(--accent); }
-.muted { color: var(--muted); }
+.muted { color: var(--muted); font-weight: 400; }
 
 /* ---- 网格 ---- */
 .grid {
@@ -60,12 +64,13 @@ html, body {
   grid-template-columns: repeat(3, 1fr);
   gap: 16px;
   padding: 24px 28px 40px;
-  max-width: 1280px; margin: 0 auto;
+  max-width: 1320px; margin: 0 auto;
 }
 .span2 { grid-column: span 2; }
-@media (max-width: 900px) {
+.span3 { grid-column: span 3; }
+@media (max-width: 940px) {
   .grid { grid-template-columns: 1fr; }
-  .span2 { grid-column: span 1; }
+  .span2, .span3 { grid-column: span 1; }
 }
 
 /* ---- 卡片 ---- */
@@ -74,18 +79,21 @@ html, body {
   border: 1px solid var(--line);
   border-radius: var(--radius);
   padding: 18px 20px;
+  min-width: 0;
 }
 .card h2 {
   margin: 0 0 14px; font-size: 12px; font-weight: 600;
   letter-spacing: .1em; text-transform: uppercase; color: var(--muted);
+  display: flex; align-items: center; gap: 8px;
 }
+.card h2 .mini { margin-left: auto; }
 
 /* ---- 账户 ---- */
-.account { display: flex; gap: 28px; align-items: flex-end; grid-column: span 3; }
-@media (max-width: 900px) { .account { grid-column: span 1; flex-wrap: wrap; } }
+.account { display: flex; gap: 40px; align-items: flex-end; }
+.account { flex-wrap: wrap; }
 .metric { display: flex; flex-direction: column; gap: 6px; }
 .metric label { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
-.metric strong { font-size: 28px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.metric strong { font-size: 30px; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
 
 /* ---- 表单 ---- */
 .row { display: flex; gap: 8px; margin-bottom: 12px; }
@@ -95,18 +103,23 @@ input, select {
   border: 1px solid var(--line); border-radius: 8px; outline: none;
   font-variant-numeric: tabular-nums;
 }
-input:focus, select:focus { border-color: var(--accent); }
-.ex { max-width: 120px; }
+input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-sub); }
+.ex { max-width: 110px; }
 
 .btn {
   padding: 9px 16px; font-size: 14px; cursor: pointer;
   background: var(--accent); color: #fff; border: 1px solid var(--accent);
   border-radius: 8px; white-space: nowrap; transition: opacity .15s;
 }
-.btn:hover { opacity: .88; }
+.btn:hover { opacity: .9; }
 .btn.ghost { background: transparent; color: var(--ink); border-color: var(--line); }
 .btn.ghost:hover { border-color: var(--accent); color: var(--accent); opacity: 1; }
 .btn.submit { width: 100%; margin-top: 4px; }
+.mini {
+  font-size: 11px; padding: 3px 9px; cursor: pointer; letter-spacing: .04em;
+  background: transparent; color: var(--muted); border: 1px solid var(--line); border-radius: 6px;
+}
+.mini:hover { color: var(--accent); border-color: var(--accent); }
 
 .orderform { display: flex; flex-direction: column; gap: 10px; }
 
@@ -128,23 +141,28 @@ input:focus, select:focus { border-color: var(--accent); }
 .tbl td { padding: 8px; border-bottom: 1px solid var(--line); font-size: 13px; }
 .tbl tr:last-child td { border-bottom: none; }
 .tbl .r, th.r { text-align: right; }
-.tbl tbody:empty::after { content: ""; }
+.tbl tbody tr.click { cursor: pointer; }
+.tbl tbody tr.click:hover { background: var(--accent-sub); }
+.tbl tr.off td { opacity: .45; }
 .empty td { color: var(--muted); text-align: center; padding: 18px; font-size: 13px; }
+.sub { color: var(--muted); font-size: 11px; margin-top: 2px; }
 
 .up { color: var(--up); }
 .down { color: var(--down); }
 .tag { font-size: 11px; padding: 2px 7px; border-radius: 5px; border: 1px solid var(--line); color: var(--muted); }
-.tag.long { color: var(--up); border-color: color-mix(in srgb, var(--up) 35%, transparent); }
-.tag.short { color: var(--down); border-color: color-mix(in srgb, var(--down) 35%, transparent); }
-.x { cursor: pointer; color: var(--muted); border: none; background: none; font-size: 13px; }
-.x:hover { color: var(--up); }
+.tag.long { color: var(--accent); background: var(--accent-sub); border-color: transparent; }
+.tag.short { color: var(--down); border-color: var(--line); }
+.x { cursor: pointer; color: var(--muted); border: 1px solid var(--line); background: none; font-size: 12px; padding: 2px 8px; border-radius: 6px; }
+.x:hover { color: var(--accent); border-color: var(--accent); }
+
+/* ---- 图表 ---- */
+.chartcard canvas { width: 100%; height: 240px; display: block; }
 
 /* ---- 日志 ---- */
-.logcard { grid-column: span 3; }
-@media (max-width: 900px) { .logcard, .account { grid-column: span 1; } }
 .log {
   font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-  font-size: 12px; line-height: 1.7; color: var(--muted);
-  max-height: 160px; overflow-y: auto;
+  font-size: 12px; line-height: 1.75; color: var(--muted);
+  max-height: 150px; overflow-y: auto;
 }
-.log .t { color: var(--ink); opacity: .55; margin-right: 8px; }
+.log .t { color: var(--ink); opacity: .5; margin-right: 8px; }
+.log .err { color: var(--down); }

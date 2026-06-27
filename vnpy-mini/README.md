@@ -4,7 +4,19 @@
 
 后端不重复造轮子——交易/行情/撮合全部交给 vnpy 的 `MainEngine`；这里只做一层很薄的
 FastAPI 桥接：把 vnpy 的实时事件用 WebSocket 推给浏览器，把浏览器的下单/撤单/订阅
-转成 vnpy 的请求对象。前端是**纯原生 JS，无框架、无构建步骤**。
+转成 vnpy 的请求对象。前端是**纯原生 JS，无框架、无构建步骤**，黑白 + 蓝色极简风格。
+
+功能
+----
+- 账户权益 / 可用 / 浮动盈亏实时刷新
+- 行情订阅 + 自选列表（点击某行即选中到图表/下单/策略）
+- **实时走势图**（原生 canvas，无第三方库）
+- 下单（买卖 / 开平分段选择，限价）、委托列表、单笔撤单、**一键全撤**
+- 持仓列表（净额持仓）+ **一键平仓**
+- 成交回报、运行日志
+- **策略引擎**：内置「双均线交叉」示例策略，可填合约/快慢线/手数后启动，
+  在引擎内消费实时行情自动下单，列表可见净仓与触发次数，支持一键停止
+  （mock 与 live 通用——换成你自己的策略只需改 `MAStrategy`）
 
 ```
 vnpy-mini/
@@ -95,9 +107,12 @@ REST：
 - `POST /api/subscribe`  → `{symbol, exchange}`
 - `POST /api/order`      → `{symbol, exchange, direction(LONG/SHORT), offset(OPEN/CLOSE), type, price, volume}`
 - `POST /api/cancel`     → `{orderid, symbol, exchange}`
+- `GET  /api/strategies` → 运行中的策略列表
+- `POST /api/strategy/start` → `{name, symbol, exchange, fast, slow, volume}`
+- `POST /api/strategy/stop`  → `{id}`
 
 WebSocket `/ws`：服务器单向推送 `{type, data}`，
-`type ∈ {snapshot, tick, order, trade, position, account, log}`。
+`type ∈ {snapshot, tick, order, trade, position, account, strategy, log}`。
 
 要加新功能（K线、策略启停、条件单等），在 `EngineBase` 加方法、
 两套引擎各实现一份、前端加对应渲染即可。

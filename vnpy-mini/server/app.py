@@ -24,7 +24,7 @@ import os
 import random
 import threading
 import time
-from dataclasses import dataclass, field
+from collections import deque
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
@@ -66,24 +66,135 @@ class ConnectReq(BaseModel):
     setting: Dict[str, Any] = {}
 
 
+class StrategyStartReq(BaseModel):
+    name: str = "双均线"
+    symbol: str
+    exchange: str = "SHFE"
+    fast: int = 5
+    slow: int = 20
+    volume: float = 1.0
+
+
+class StrategyStopReq(BaseModel):
+    id: str
+
+
 # --------------------------------------------------------------------------- #
 # 引擎抽象 —— 前端只认这套统一接口，mock 与 live 各实现一份
 # --------------------------------------------------------------------------- #
+class MAStrategy:
+    """示例策略：双均线交叉。快线上穿慢线做多、下穿做空，交叉时反手。
+
+    在引擎内消费实时 tick，自动通过 engine.send_order 发单——mock / live 通用。
+    仅作演示，参数与下单逻辑可自行替换。
+    """
+
+    def __init__(self, sid, name, symbol, exchange, params, engine):
+        self.id = sid
+        self.name = name
+        self.symbol = symbol
+        self.exchange = exchange
+        self.fast = max(1, int(params.get("fast", 5)))
+        self.slow = max(self.fast + 1, int(params.get("slow", 20)))
+        self.volume = float(params.get("volume", 1))
+        self.engine = engine
+        self.prices: deque = deque(maxlen=self.slow)
+        self.signal = 0          # 上一次信号 1/-1/0
+        self.net = 0.0           # 本策略累计净头寸（带符号）
+        self.trades = 0
+        self.active = True
+
+    def on_tick(self, tick: Dict[str, Any]):
+        if not self.active:
+            return
+        self.prices.append(tick["last_price"])
+        if len(self.prices) < self.slow:
+            return
+        prices = list(self.prices)
+        fast = sum(prices[-self.fast:]) / self.fast
+        slow = sum(prices) / len(prices)
+        sig = 1 if fast > slow else (-1 if fast < slow else 0)
+        if sig == 0 or sig == self.signal:
+            return                # 只在信号翻转时下单
+        self.signal = sig
+        direction = "LONG" if sig > 0 else "SHORT"
+        self.engine.send_order(OrderReq(
+            symbol=self.symbol, exchange=self.exchange,
+            direction=direction, offset="OPEN", type="LIMIT",
+            price=tick["last_price"], volume=self.volume,
+        ))
+        self.net += self.volume if sig > 0 else -self.volume
+        self.trades += 1
+        self.engine.on_event("log", {
+            "msg": f"[策略 {self.name}] {'多' if sig > 0 else '空'}头信号 → {self.symbol} @ {tick['last_price']}",
+            "level": "info",
+        })
+        self.engine.on_event("strategy", self.engine._strat_info(self))
+
+    def info(self):
+        return {
+            "id": self.id, "name": self.name, "symbol": self.symbol,
+            "exchange": self.exchange, "fast": self.fast, "slow": self.slow,
+            "volume": self.volume, "net": self.net, "trades": self.trades,
+            "active": self.active,
+        }
+
+
 class EngineBase:
-    """统一引擎接口。on_event 由 server 注入，用来把事件推给所有 WebSocket。"""
+    """统一引擎接口。on_event 由 server 注入，用来把事件推给所有 WebSocket。
+    emit() 在转发 tick 给前端的同时，喂给所有在跑的策略。"""
 
     name = "base"
 
     def __init__(self, on_event: Callable[[str, Any], None]):
         self.on_event = on_event
+        self._strategies: Dict[str, MAStrategy] = {}
+        self._strat_seq = 0
 
+    # ---- 事件出口：tick 先喂策略，再推前端 -------------------------------- #
+    def emit(self, type_: str, data: Any):
+        if type_ == "tick":
+            for s in list(self._strategies.values()):
+                if s.active and s.symbol == data.get("symbol"):
+                    try:
+                        s.on_tick(data)
+                    except Exception as exc:  # 策略异常不应拖垮行情
+                        self.on_event("log", {"msg": f"策略异常: {exc}", "level": "error"})
+        self.on_event(type_, data)
+
+    # ---- 策略管理 ---------------------------------------------------------- #
+    def start_strategy(self, name, symbol, exchange, params) -> str:
+        self._strat_seq += 1
+        sid = f"S{self._strat_seq}"
+        strat = MAStrategy(sid, name, symbol, exchange, params, self)
+        self._strategies[sid] = strat
+        self.subscribe(symbol, exchange)            # 确保有行情可消费
+        self.on_event("log", {"msg": f"策略启动 {name} {symbol} (MA{strat.fast}/{strat.slow})", "level": "info"})
+        self.on_event("strategy", strat.info())
+        return sid
+
+    def stop_strategy(self, sid: str):
+        s = self._strategies.get(sid)
+        if s:
+            s.active = False
+            self.on_event("log", {"msg": f"策略停止 {s.name} {s.symbol}", "level": "info"})
+            self.on_event("strategy", s.info())
+
+    def _strat_info(self, s: MAStrategy):
+        return s.info()
+
+    def strategies(self) -> List[Dict[str, Any]]:
+        return [s.info() for s in self._strategies.values()]
+
+    # ---- 交易接口（子类实现） --------------------------------------------- #
     def connect(self, setting: Dict[str, Any]) -> None: ...
     def subscribe(self, symbol: str, exchange: str) -> None: ...
     def send_order(self, req: OrderReq) -> str: ...
     def cancel_order(self, req: CancelReq) -> None: ...
     def snapshot(self) -> Dict[str, Any]:
-        """REST 首屏快照：账户 / 持仓 / 委托 / 成交。"""
-        return {"account": {}, "positions": [], "orders": [], "trades": [], "ticks": []}
+        """REST 首屏快照：账户 / 持仓 / 委托 / 成交 / 策略。"""
+        return {"account": {}, "positions": [], "orders": [], "trades": [],
+                "ticks": [], "strategies": []}
 
     def close(self) -> None: ...
 
@@ -159,7 +270,7 @@ class MockEngine(EngineBase):
                 "volume": st["volume"],
             }
             self._match_orders(symbol, last)
-        self.on_event("tick", tick)
+        self.emit("tick", tick)          # 推前端 + 喂策略
         self._recalc_pnl()
 
     # ---- 撮合 -------------------------------------------------------------- #
@@ -201,42 +312,66 @@ class MockEngine(EngineBase):
             self._apply_fill(trade)
             self.on_event("trade", trade)
 
+    def _pos_view(self, pos: Dict[str, Any]) -> Dict[str, Any]:
+        """内部用带符号净仓 -> 前端用 {direction, volume} 视图。"""
+        net = pos["net"]
+        return {
+            "symbol": pos["symbol"], "exchange": pos["exchange"],
+            "direction": "LONG" if net >= 0 else "SHORT",
+            "volume": abs(net), "price": pos["price"], "pnl": pos.get("pnl", 0.0),
+        }
+
     def _apply_fill(self, trade: Dict[str, Any]):
-        key = f"{trade['symbol']}.{trade['direction']}"
-        pos = self._positions.get(key)
-        if pos is None:
-            pos = {
-                "symbol": trade["symbol"],
-                "exchange": trade["exchange"],
-                "direction": trade["direction"],
-                "volume": 0.0,
-                "price": 0.0,
-                "pnl": 0.0,
-            }
-            self._positions[key] = pos
-        new_vol = pos["volume"] + trade["volume"]
-        if new_vol > 0:
-            pos["price"] = round(
-                (pos["price"] * pos["volume"] + trade["price"] * trade["volume"]) / new_vol, 2
-            )
-        pos["volume"] = new_vol
-        self.on_event("position", pos)
+        """以带符号净仓维护持仓：开/平/反手都能正确净额。"""
+        sym = trade["symbol"]
+        vol = trade["volume"]
+        delta = vol if trade["direction"] == "LONG" else -vol
+        pos = self._positions.get(sym) or {
+            "symbol": sym, "exchange": trade["exchange"], "net": 0.0, "price": 0.0, "pnl": 0.0,
+        }
+        old = pos["net"]
+        new = old + delta
+        if old == 0 or (old > 0) == (delta > 0):
+            # 同向加仓 -> 摊薄均价
+            denom = abs(old) + vol
+            pos["price"] = round((pos["price"] * abs(old) + trade["price"] * vol) / denom, 2)
+        elif new != 0 and (new > 0) != (old > 0):
+            # 反手 -> 以成交价为新均价
+            pos["price"] = trade["price"]
+        pos["net"] = new
+        self._positions[sym] = pos
+
+        old_dir = "LONG" if old > 0 else ("SHORT" if old < 0 else None)
+        new_dir = "LONG" if new > 0 else ("SHORT" if new < 0 else None)
+        # 方向翻转时，先把旧方向清零，前端据此移除旧行
+        if old_dir and old_dir != new_dir:
+            self.on_event("position", {"symbol": sym, "exchange": pos["exchange"],
+                                       "direction": old_dir, "volume": 0, "price": 0, "pnl": 0})
+        if new == 0:
+            self._positions.pop(sym, None)
+            self.on_event("position", {"symbol": sym, "exchange": pos["exchange"],
+                                       "direction": new_dir or old_dir, "volume": 0, "price": 0, "pnl": 0})
+        else:
+            self.on_event("position", self._pos_view(pos))
 
     def _recalc_pnl(self):
         with self._lock:
             pnl = 0.0
+            views = []
             for pos in self._positions.values():
                 st = self._subscribed.get(pos["symbol"])
-                if not st or not pos["volume"]:
+                if not st or not pos["net"]:
                     continue
-                last = st["last_price"]
-                sign = 1 if pos["direction"] == "LONG" else -1
-                pos["pnl"] = round((last - pos["price"]) * pos["volume"] * sign, 2)
+                # 带符号净仓：盈亏 = (现价 - 均价) * 净仓
+                pos["pnl"] = round((st["last_price"] - pos["price"]) * pos["net"], 2)
                 pnl += pos["pnl"]
+                views.append(self._pos_view(pos))
             self._account["pnl"] = round(pnl, 2)
             self._account["balance"] = round(1_000_000.0 + pnl, 2)
             acct = dict(self._account)
         self.on_event("account", acct)
+        for v in views:                 # 让持仓盈亏也实时刷新
+            self.on_event("position", v)
 
     # ---- 对外接口 ---------------------------------------------------------- #
     def connect(self, setting):
@@ -305,10 +440,11 @@ class MockEngine(EngineBase):
             ]
             return {
                 "account": dict(self._account),
-                "positions": [p for p in self._positions.values() if p["volume"]],
+                "positions": [self._pos_view(p) for p in self._positions.values() if p["net"]],
                 "orders": list(self._orders.values()),
                 "trades": list(self._trades),
                 "ticks": ticks,
+                "strategies": self.strategies(),
             }
 
     def close(self):
@@ -339,7 +475,7 @@ class VnpyEngine(EngineBase):
         self.main_engine.add_gateway(CtpGateway)
 
         ee = self.event_engine
-        ee.register(EVENT_TICK, lambda e: self.on_event("tick", self._tick(e.data)))
+        ee.register(EVENT_TICK, lambda e: self.emit("tick", self._tick(e.data)))
         ee.register(EVENT_ORDER, lambda e: self.on_event("order", self._order(e.data)))
         ee.register(EVENT_TRADE, lambda e: self.on_event("trade", self._trade(e.data)))
         ee.register(EVENT_POSITION, lambda e: self.on_event("position", self._position(e.data)))
@@ -435,6 +571,7 @@ class VnpyEngine(EngineBase):
             "orders": [self._order(o) for o in me.get_all_orders()],
             "trades": [self._trade(t) for t in me.get_all_trades()],
             "ticks": [self._tick(t) for t in me.get_all_ticks()],
+            "strategies": self.strategies(),
         }
 
     def close(self):
@@ -537,6 +674,26 @@ async def order(req: OrderReq):
 @app.post("/api/cancel")
 async def cancel(req: CancelReq):
     engine.cancel_order(req)
+    return {"ok": True}
+
+
+@app.get("/api/strategies")
+async def list_strategies():
+    return engine.strategies()
+
+
+@app.post("/api/strategy/start")
+async def strategy_start(req: StrategyStartReq):
+    sid = engine.start_strategy(
+        req.name, req.symbol, req.exchange,
+        {"fast": req.fast, "slow": req.slow, "volume": req.volume},
+    )
+    return {"ok": True, "id": sid}
+
+
+@app.post("/api/strategy/stop")
+async def strategy_stop(req: StrategyStopReq):
+    engine.stop_strategy(req.id)
     return {"ok": True}
 
 

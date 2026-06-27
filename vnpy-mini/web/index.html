@@ -19,19 +19,40 @@
 
   <main class="grid">
     <!-- 账户 -->
-    <section class="card account" aria-label="账户">
-      <div class="metric">
-        <label>权益</label>
-        <strong id="balance">—</strong>
-      </div>
-      <div class="metric">
-        <label>可用</label>
-        <strong id="available">—</strong>
-      </div>
-      <div class="metric">
-        <label>浮动盈亏</label>
-        <strong id="pnl" class="num">—</strong>
-      </div>
+    <section class="card account span3" aria-label="账户">
+      <div class="metric"><label>权益</label><strong id="balance">—</strong></div>
+      <div class="metric"><label>可用</label><strong id="available">—</strong></div>
+      <div class="metric"><label>浮动盈亏</label><strong id="pnl" class="num">—</strong></div>
+    </section>
+
+    <!-- 行情图 -->
+    <section class="card span2 chartcard">
+      <h2>行情图 <span class="muted" id="chartSym">点击行情选择合约</span></h2>
+      <canvas id="chart"></canvas>
+    </section>
+
+    <!-- 下单 -->
+    <section class="card">
+      <h2>下单</h2>
+      <form id="orderForm" class="orderform">
+        <div class="row">
+          <input id="oSymbol" placeholder="合约 如 rb2510" autocomplete="off" />
+          <select id="oExchange" class="ex"></select>
+        </div>
+        <div class="seg" id="dirSeg">
+          <button type="button" data-v="LONG" class="active">买 / 多</button>
+          <button type="button" data-v="SHORT">卖 / 空</button>
+        </div>
+        <div class="seg" id="offSeg">
+          <button type="button" data-v="OPEN" class="active">开仓</button>
+          <button type="button" data-v="CLOSE">平仓</button>
+        </div>
+        <div class="row">
+          <input id="oPrice" type="number" step="any" placeholder="价格" />
+          <input id="oVolume" type="number" step="any" placeholder="数量" value="1" />
+        </div>
+        <button class="btn submit">提交委托</button>
+      </form>
     </section>
 
     <!-- 行情订阅 + 自选 -->
@@ -48,31 +69,30 @@
       </table>
     </section>
 
-    <!-- 下单 -->
-    <section class="card">
-      <h2>下单</h2>
-      <form id="orderForm" class="orderform">
-        <input id="oSymbol" placeholder="合约" autocomplete="off" />
-        <select id="oExchange" class="ex"></select>
-        <div class="seg" id="dirSeg">
-          <button type="button" data-v="LONG" class="active">买 / 多</button>
-          <button type="button" data-v="SHORT">卖 / 空</button>
-        </div>
-        <div class="seg" id="offSeg">
-          <button type="button" data-v="OPEN" class="active">开仓</button>
-          <button type="button" data-v="CLOSE">平仓</button>
-        </div>
+    <!-- 策略 -->
+    <section class="card span2">
+      <h2>策略 <span class="muted">双均线交叉（演示）</span></h2>
+      <form id="stratForm" class="orderform">
         <div class="row">
-          <input id="oPrice" type="number" step="any" placeholder="价格" />
-          <input id="oVolume" type="number" step="any" placeholder="数量" value="1" />
+          <input id="stSymbol" placeholder="合约" autocomplete="off" />
+          <select id="stExchange" class="ex"></select>
+          <input id="stFast" type="number" placeholder="快线" value="5" />
+          <input id="stSlow" type="number" placeholder="慢线" value="20" />
+          <input id="stVol" type="number" placeholder="手数" value="1" />
+          <button class="btn">启动</button>
         </div>
-        <button class="btn submit" id="submitBtn">提交委托</button>
       </form>
+      <table class="tbl" id="stratTbl">
+        <thead><tr><th>策略</th><th class="r">净仓</th><th class="r">触发</th><th>状态</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
     </section>
 
     <!-- 委托 -->
     <section class="card span2">
-      <h2>委托 <span class="muted" id="orderCount"></span></h2>
+      <h2>委托 <span class="muted" id="orderCount"></span>
+        <button id="cancelAll" class="mini">全撤</button>
+      </h2>
       <table class="tbl" id="orderTbl">
         <thead><tr>
           <th>编号</th><th>合约</th><th>方向</th><th class="r">价格</th>
@@ -86,13 +106,13 @@
     <section class="card">
       <h2>持仓</h2>
       <table class="tbl" id="posTbl">
-        <thead><tr><th>合约</th><th>方向</th><th class="r">数量</th><th class="r">均价</th><th class="r">盈亏</th></tr></thead>
+        <thead><tr><th>合约</th><th>方向</th><th class="r">数量</th><th class="r">均价</th><th class="r">盈亏</th><th></th></tr></thead>
         <tbody></tbody>
       </table>
     </section>
 
     <!-- 成交 -->
-    <section class="card">
+    <section class="card span2">
       <h2>成交</h2>
       <table class="tbl" id="tradeTbl">
         <thead><tr><th>时间</th><th>合约</th><th>方向</th><th class="r">价格</th><th class="r">数量</th></tr></thead>
@@ -101,7 +121,7 @@
     </section>
 
     <!-- 日志 -->
-    <section class="card span2 logcard">
+    <section class="card">
       <h2>日志</h2>
       <div id="log" class="log"></div>
     </section>
