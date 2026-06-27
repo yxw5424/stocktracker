@@ -79,6 +79,14 @@ class StrategyStopReq(BaseModel):
     id: str
 
 
+class AdvisorRunReq(BaseModel):
+    session: str = "open"          # open / close
+
+
+class SignalGenReq(BaseModel):
+    top_n: int = 15
+
+
 # --------------------------------------------------------------------------- #
 # 引擎抽象 —— 前端只认这套统一接口，mock 与 live 各实现一份
 # --------------------------------------------------------------------------- #
@@ -612,6 +620,60 @@ class WSManager:
 manager = WSManager()
 engine: Optional[EngineBase] = None
 
+# AI 顾问 / 调度 状态
+AI: Dict[str, Any] = {"signals": [], "decision": None}
+scheduler = None  # 在 startup 创建
+
+
+# 用研究层在合成（或真实）面板上生成"今日选股信号"，再用 portfolio 做风控
+def generate_signals(top_n: int = 15) -> List[Dict[str, Any]]:
+    from research import data as D, factors as F
+    from research.portfolio import build_portfolio
+    panel = D.make_synthetic_panel(n_symbols=60, n_days=160)
+    score = F.combine(F.compute_price_factors(panel))
+    d = score.index[-1]
+    last = score.loc[d]
+    tradable = (~panel["suspended"].loc[d])
+    w = build_portfolio(last, tradable, top_n=top_n, max_weight=0.12, max_turnover=1.0)
+    sigs = [{"symbol": s, "weight": round(float(w[s]), 4), "score": round(float(last[s]), 3)}
+            for s in w.index]
+    sigs.sort(key=lambda x: -x["score"])
+    return sigs
+
+
+def _exchange_of(symbol: str) -> str:
+    if symbol.endswith(".SH"):
+        return "SSE"
+    if symbol.endswith(".SZ"):
+        return "SZSE"
+    return "SSE"
+
+
+async def daily_routine(session: str) -> Dict[str, Any]:
+    """开盘/收盘例程：汇总上下文 → Claude 顾问决策 → 推送前端。"""
+    from advisor import build_context, run_advisor, fetch_market_snapshot, fetch_news
+    snap = engine.snapshot() if engine else {}
+    ctx = build_context(
+        session=session,
+        date=datetime.now().strftime("%Y-%m-%d"),
+        account=snap.get("account", {}),
+        positions=snap.get("positions", []),
+        signals=AI["signals"],
+        market=await asyncio.to_thread(fetch_market_snapshot),
+        news=await asyncio.to_thread(fetch_news),
+    )
+    # run_advisor 可能调用 Claude（阻塞），放线程里
+    decision = await asyncio.to_thread(run_advisor, ctx)
+    decision["session"] = session
+    decision["at"] = datetime.now().isoformat(timespec="seconds")
+    AI["decision"] = decision
+    manager.push("advisor", decision)
+    manager.push("log", {"msg": f"[AI顾问/{session}] {decision.get('stance')} · "
+                                f"{len(decision.get('actions', []))}条调仓建议 · "
+                                f"引擎 {decision.get('_engine')}", "level": "info"})
+    return decision
+
+
 app = FastAPI(title="vnpy-mini")
 
 
@@ -633,9 +695,17 @@ async def _startup():
     else:
         engine = MockEngine(on_event)
 
+    # 交易日开盘/收盘调度器：到点自动跑 AI 顾问例程
+    global scheduler
+    from scheduler import MarketScheduler
+    scheduler = MarketScheduler(daily_routine)
+    scheduler.start()
+
 
 @app.on_event("shutdown")
 async def _shutdown():
+    if scheduler:
+        scheduler.stop()
     if engine:
         engine.close()
 
@@ -675,6 +745,37 @@ async def order(req: OrderReq):
 async def cancel(req: CancelReq):
     engine.cancel_order(req)
     return {"ok": True}
+
+
+@app.get("/api/signals")
+async def get_signals():
+    return AI["signals"]
+
+
+@app.post("/api/signals/generate")
+async def signals_generate(req: SignalGenReq):
+    try:
+        AI["signals"] = await asyncio.to_thread(generate_signals, req.top_n)
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": f"需要 numpy/pandas: {exc}"}, status_code=500)
+    manager.push("signals", AI["signals"])
+    return {"ok": True, "signals": AI["signals"]}
+
+
+@app.get("/api/advisor/latest")
+async def advisor_latest():
+    return AI["decision"] or {}
+
+
+@app.post("/api/advisor/run")
+async def advisor_run(req: AdvisorRunReq):
+    decision = await daily_routine(req.session)
+    return {"ok": True, "decision": decision}
+
+
+@app.get("/api/schedule")
+async def schedule():
+    return scheduler.upcoming() if scheduler else []
 
 
 @app.get("/api/strategies")

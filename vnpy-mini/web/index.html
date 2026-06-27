@@ -120,8 +120,33 @@
       </table>
     </section>
 
-    <!-- 日志 -->
+    <!-- 今日信号（量化选股） -->
     <section class="card">
+      <h2>今日信号 <span class="muted">多因子</span>
+        <button id="genSignals" class="mini">生成</button>
+      </h2>
+      <table class="tbl" id="signalTbl">
+        <thead><tr><th>合约</th><th class="r">权重</th><th class="r">打分</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <!-- AI 顾问决策 -->
+    <section class="card span2 advisorcard">
+      <h2>AI 顾问决策 <span class="muted" id="adviceEngine"></span>
+        <span class="mini-group">
+          <button id="runOpen" class="mini">开盘例程</button>
+          <button id="runClose" class="mini">收盘例程</button>
+        </span>
+      </h2>
+      <div id="adviceBody" class="advice">
+        <div class="muted">点击「开盘例程」：AI 顾问基于 持仓 + 量化信号 + 大盘 + 新闻 给出"下一步是否操作、如何操作"。</div>
+      </div>
+      <div class="muted sub" id="scheduleLine"></div>
+    </section>
+
+    <!-- 日志 -->
+    <section class="card span3">
       <h2>日志</h2>
       <div id="log" class="log"></div>
     </section>

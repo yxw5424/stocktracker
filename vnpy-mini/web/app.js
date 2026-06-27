@@ -10,10 +10,13 @@ const state = {
   strategies: new Map(),   // id -> strategy
   trades: [],              // 最近成交（倒序）
   series: new Map(),       // symbol -> [{price}]  价格序列，画图用
+  signals: [],             // 量化今日信号
   chartSymbol: null,
   dir: "LONG",
   off: "OPEN",
 };
+
+const exOf = (s) => (s.endsWith(".SH") ? "SSE" : s.endsWith(".SZ") ? "SZSE" : "SSE");
 const SERIES_MAX = 120;
 
 // ---------- 工具 ----------
@@ -131,6 +134,53 @@ function renderStrategies() {
     </tr>`).join("");
 }
 
+// ---------- 今日信号 + AI 顾问 ----------
+function renderSignals() {
+  const body = $("signalTbl").querySelector("tbody");
+  if (!state.signals.length) {
+    body.innerHTML = `<tr class="empty"><td colspan="4">点击「生成」运行量化选股</td></tr>`;
+    return;
+  }
+  body.innerHTML = state.signals.map((s) => `
+    <tr>
+      <td>${s.symbol}</td>
+      <td class="r">${(s.weight * 100).toFixed(1)}%</td>
+      <td class="r">${fmt(s.score)}</td>
+      <td><button class="x" data-build="${s.symbol}">建仓</button></td>
+    </tr>`).join("");
+}
+
+function renderAdvice(d) {
+  $("adviceEngine").textContent = d._engine ? `· ${d._engine}` : "";
+  const acts = (d.actions || []).map((a) => `
+    <tr>
+      <td>${a.symbol}</td>
+      <td><span class="act ${a.action}">${a.action}</span></td>
+      <td class="r">${(a.target_weight * 100).toFixed(1)}%</td>
+      <td class="r">${(a.confidence * 100).toFixed(0)}%</td>
+      <td>${["buy", "add"].includes(a.action) ? `<button class="x" data-build="${a.symbol}">执行</button>` : ""}</td>
+    </tr>`).join("");
+  const swings = (d.swing_ideas || []).map((s) => `
+    <div class="swing"><b>${s.symbol}</b> ${s.setup}：进 ${s.entry} / 损 ${s.stop} / 盈 ${s.take_profit}
+      <div class="muted">${s.reason}</div></div>`).join("");
+  $("adviceBody").innerHTML = `
+    <div><span class="stance ${d.stance}">${({risk_on:"偏多",neutral:"中性",risk_off:"偏空"})[d.stance] || d.stance}</span>
+      <span class="muted">信心 ${(d.confidence * 100).toFixed(0)}%</span></div>
+    <div class="view">${d.market_view || ""}</div>
+    ${acts ? `<table class="tbl"><thead><tr><th>合约</th><th>动作</th><th class="r">目标权重</th><th class="r">信心</th><th></th></tr></thead><tbody>${acts}</tbody></table>` : ""}
+    ${swings ? `<div><div class="muted" style="margin-bottom:4px">波段想法</div>${swings}</div>` : ""}
+    ${d.risk_notes ? `<div class="risk">⚠ ${d.risk_notes}</div>` : ""}`;
+}
+
+function buildPosition(symbol) {
+  // 建仓/执行：订阅后挂高价限价单（mock 即时成交；live 走真实撮合）
+  const ex = exOf(symbol);
+  post("/api/subscribe", { symbol, exchange: ex });
+  post("/api/order", { symbol, exchange: ex, direction: "LONG", offset: "OPEN",
+                       type: "LIMIT", price: 99999, volume: 100 });
+  log(`按信号建仓 ${symbol}`);
+}
+
 // ---------- 图表（原生 canvas，无依赖）----------
 function pushSeries(tick) {
   let arr = state.series.get(tick.symbol);
@@ -234,6 +284,8 @@ function handle({ type, data }) {
     }
     case "account": renderAccount(data); break;
     case "strategy": state.strategies.set(data.id, data); renderStrategies(); break;
+    case "signals": state.signals = data; renderSignals(); break;
+    case "advisor": renderAdvice(data); break;
     case "log": log(data.msg, data.level); break;
   }
 }
@@ -355,14 +407,46 @@ function bind() {
     if (btn) post("/api/strategy/stop", { id: btn.dataset.stop });
   });
 
+  // 今日信号：生成 + 建仓
+  $("genSignals").onclick = async () => {
+    const r = await post("/api/signals/generate", { top_n: 10 });
+    if (r && r.ok) { state.signals = r.signals; renderSignals(); log(`已生成 ${r.signals.length} 条量化信号`); }
+    else if (r) log(r.error || "信号生成失败", "error");
+  };
+  document.body.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-build]");
+    if (btn) buildPosition(btn.dataset.build);
+  });
+
+  // AI 顾问：开盘/收盘例程
+  $("runOpen").onclick = async () => {
+    log("正在运行 AI 顾问·开盘例程…");
+    const r = await post("/api/advisor/run", { session: "open" });
+    if (r && r.ok) renderAdvice(r.decision);
+  };
+  $("runClose").onclick = async () => {
+    log("正在运行 AI 顾问·收盘例程…");
+    const r = await post("/api/advisor/run", { session: "close" });
+    if (r && r.ok) renderAdvice(r.decision);
+  };
+
   window.addEventListener("resize", drawChart);
 }
 
 // ---------- 启动 ----------
 async function init() {
   bind();
-  renderQuotes(); renderOrders(); renderPositions(); renderTrades(); renderStrategies(); drawChart();
+  renderQuotes(); renderOrders(); renderPositions(); renderTrades(); renderStrategies();
+  renderSignals(); drawChart();
   try { $("mode").textContent = (await (await fetch("/api/status")).json()).mode; } catch (_) {}
+  // 载入已有信号 / 最近决策 / 调度计划
+  try { state.signals = await (await fetch("/api/signals")).json(); renderSignals(); } catch (_) {}
+  try { const d = await (await fetch("/api/advisor/latest")).json(); if (d && d.stance) renderAdvice(d); } catch (_) {}
+  try {
+    const sch = await (await fetch("/api/schedule")).json();
+    if (sch.length) $("scheduleLine").textContent =
+      "下次自动运行：" + sch.slice(0, 2).map((s) => `${s.at}（${s.session === "open" ? "开盘" : "收盘"}）`).join(" · ");
+  } catch (_) {}
   connectWS();
 }
 init();
