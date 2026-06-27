@@ -1,0 +1,9 @@
+# --- 界面后端（mock 模式只需要这三个，能立刻跑起来）---
+fastapi>=0.110
+uvicorn[standard]>=0.27
+pydantic>=2.0
+
+# --- live 模式（真·实时模拟盘）额外需要，按需手动安装 ---
+# 见 README：建议在 Windows + Python 3.10 下安装
+# vnpy>=4.0
+# vnpy_ctp        # CTP/SimNow 网关（含编译好的 C++ 接口）

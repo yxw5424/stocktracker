@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>vnpy · mini</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">vnpy<span>·</span>mini</div>
+    <div class="status">
+      <span id="mode" class="badge">—</span>
+      <span class="dot" id="dot"></span>
+      <span id="conn" class="muted">未连接</span>
+      <button id="connectBtn" class="btn ghost">连接</button>
+    </div>
+  </header>
+
+  <main class="grid">
+    <!-- 账户 -->
+    <section class="card account" aria-label="账户">
+      <div class="metric">
+        <label>权益</label>
+        <strong id="balance">—</strong>
+      </div>
+      <div class="metric">
+        <label>可用</label>
+        <strong id="available">—</strong>
+      </div>
+      <div class="metric">
+        <label>浮动盈亏</label>
+        <strong id="pnl" class="num">—</strong>
+      </div>
+    </section>
+
+    <!-- 行情订阅 + 自选 -->
+    <section class="card">
+      <h2>行情</h2>
+      <form id="subForm" class="row">
+        <input id="subSymbol" placeholder="合约 如 rb2510" autocomplete="off" />
+        <select id="subExchange" class="ex"></select>
+        <button class="btn">订阅</button>
+      </form>
+      <table class="tbl" id="quoteTbl">
+        <thead><tr><th>合约</th><th class="r">最新</th><th class="r">买一</th><th class="r">卖一</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <!-- 下单 -->
+    <section class="card">
+      <h2>下单</h2>
+      <form id="orderForm" class="orderform">
+        <input id="oSymbol" placeholder="合约" autocomplete="off" />
+        <select id="oExchange" class="ex"></select>
+        <div class="seg" id="dirSeg">
+          <button type="button" data-v="LONG" class="active">买 / 多</button>
+          <button type="button" data-v="SHORT">卖 / 空</button>
+        </div>
+        <div class="seg" id="offSeg">
+          <button type="button" data-v="OPEN" class="active">开仓</button>
+          <button type="button" data-v="CLOSE">平仓</button>
+        </div>
+        <div class="row">
+          <input id="oPrice" type="number" step="any" placeholder="价格" />
+          <input id="oVolume" type="number" step="any" placeholder="数量" value="1" />
+        </div>
+        <button class="btn submit" id="submitBtn">提交委托</button>
+      </form>
+    </section>
+
+    <!-- 委托 -->
+    <section class="card span2">
+      <h2>委托 <span class="muted" id="orderCount"></span></h2>
+      <table class="tbl" id="orderTbl">
+        <thead><tr>
+          <th>编号</th><th>合约</th><th>方向</th><th class="r">价格</th>
+          <th class="r">数量</th><th class="r">成交</th><th>状态</th><th></th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <!-- 持仓 -->
+    <section class="card">
+      <h2>持仓</h2>
+      <table class="tbl" id="posTbl">
+        <thead><tr><th>合约</th><th>方向</th><th class="r">数量</th><th class="r">均价</th><th class="r">盈亏</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <!-- 成交 -->
+    <section class="card">
+      <h2>成交</h2>
+      <table class="tbl" id="tradeTbl">
+        <thead><tr><th>时间</th><th>合约</th><th>方向</th><th class="r">价格</th><th class="r">数量</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <!-- 日志 -->
+    <section class="card span2 logcard">
+      <h2>日志</h2>
+      <div id="log" class="log"></div>
+    </section>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>
