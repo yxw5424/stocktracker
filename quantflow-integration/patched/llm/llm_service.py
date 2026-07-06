@@ -1,0 +1,141 @@
+import os
+from typing import AsyncGenerator, List
+from panda_server.services.llm.enums.llm_model_type import LLMModelType, MODEL_CONFIG
+from panda_server.services.llm.models.message_model import Message
+import openai
+import traceback
+import logging
+import asyncio
+
+logger = logging.getLogger(__name__)
+
+
+# --- 让 Claude 的流式输出兼容原有消费方（它们读 chunk.choices[0].delta.content / .reasoning_content）---
+class _Delta:
+    def __init__(self, content=None, reasoning_content=None):
+        self.content = content
+        self.reasoning_content = reasoning_content
+
+
+class _Choice:
+    def __init__(self, delta):
+        self.delta = delta
+
+
+class _Chunk:
+    """最小化模拟 OpenAI 流式 chunk，供 utils/agents 里 chunk.choices[0].delta.* 访问。"""
+    def __init__(self, content=None, reasoning=None):
+        self.choices = [_Choice(_Delta(content=content, reasoning_content=reasoning))]
+
+
+def _resolve_config(model_name: str) -> dict:
+    """选模型配置：设了 ANTHROPIC_API_KEY 且未强制 deepseek，则内置聊天统一走 Claude。"""
+    cfg = MODEL_CONFIG.get(model_name) or MODEL_CONFIG["DeepSeek-V3"]
+    if os.getenv("ANTHROPIC_API_KEY") and os.getenv("LLM_PROVIDER", "claude").lower() == "claude":
+        cfg = MODEL_CONFIG["Claude"]
+    return cfg
+
+
+class LLMService:
+    def __init__(self, system_prompt: str, model_name: str):
+        self.system_prompt = system_prompt
+
+        # 获取模型配置（可能被环境覆盖为 Claude）
+        model_config = _resolve_config(model_name)
+        self.provider = model_config.get("provider", "openai")
+        self.model = model_config["model"]
+
+        if self.provider == "anthropic":
+            import anthropic
+            key = model_config.get("api_key_name") or os.getenv("ANTHROPIC_API_KEY")
+            self.aclient = anthropic.AsyncAnthropic(api_key=key) if key else anthropic.AsyncAnthropic()
+        else:
+            # 原 OpenAI/DeepSeek 路径，保持不变
+            self.client = openai.AsyncOpenAI(
+                api_key=model_config["api_key_name"],
+                base_url=model_config["base_url"],
+            )
+
+        # 定义系统提示词
+        self.system_message = {"role": "system", "content": self.system_prompt}
+
+    def _prepare_messages(self, messages: List[Message]):
+        """转换消息格式以适配 OpenAI API 格式 (json)"""
+        formatted_messages = []
+        for msg in messages:
+            formatted_messages.append({"role": msg.role, "content": msg.content})
+        if messages[0].role == "system":
+            formatted_messages[0] = self.system_message
+        else:
+            formatted_messages.insert(0, self.system_message)
+        return formatted_messages
+
+    # ---- Anthropic：把平台的 messages 翻成 Anthropic 格式（system 独立，无 role=system）---- #
+    def _anthropic_messages(self, messages: List[Message]):
+        conv = []
+        for m in messages:
+            role = getattr(m.role, "value", m.role)
+            content = m.content or ""
+            if role == "system":                      # 平台把 developer/检查反馈存成 system，折叠成 user
+                role, content = "user", "[系统反馈]\n" + content
+            if role not in ("user", "assistant"):
+                role = "user"
+            conv.append({"role": role, "content": content})
+        if conv and conv[0]["role"] != "user":        # Anthropic 要求首条是 user
+            conv.insert(0, {"role": "user", "content": "（开始）"})
+        return conv
+
+    async def chat_completion(self, messages: List[Message], json_mode: bool = False) -> str:
+        """发送聊天请求到 LLM API（返回完整文本）"""
+        try:
+            if self.provider == "anthropic":
+                system = self.system_prompt + ("\n\n只输出合法 JSON，不要多余文字。" if json_mode else "")
+                resp = await self.aclient.messages.create(
+                    model=self.model, max_tokens=8000, system=system,
+                    thinking={"type": "adaptive"},
+                    messages=self._anthropic_messages(messages),
+                )
+                return "".join(b.text for b in resp.content if getattr(b, "type", None) == "text")
+
+            formatted_messages = self._prepare_messages(messages)
+            response = await self.client.chat.completions.create(
+                model=self.model, messages=formatted_messages, temperature=0, stream=False,
+                response_format={"type": "json_object"} if json_mode else None,
+            )
+            content = response.choices[0].message.content
+            return content if content is not None else ""
+        except Exception as e:
+            traceback.print_exc()
+            logger.error(f"调用 LLM API 失败: {str(e)}")
+            raise
+
+    async def chat_completion_stream(self, messages, json_mode: bool = False) -> AsyncGenerator:
+        """发送流式聊天请求到 LLM API（产出 chunk，兼容原消费方的 chunk.choices[0].delta.*）"""
+        try:
+            if self.provider == "anthropic":
+                system = self.system_prompt + ("\n\n只输出合法 JSON，不要多余文字。" if json_mode else "")
+                async with self.aclient.messages.stream(
+                    model=self.model, max_tokens=8000, system=system,
+                    thinking={"type": "adaptive", "display": "summarized"},
+                    messages=self._anthropic_messages(messages),
+                ) as stream:
+                    async for event in stream:
+                        if getattr(event, "type", None) == "content_block_delta":
+                            d = event.delta
+                            if getattr(d, "type", None) == "text_delta":
+                                yield _Chunk(content=d.text)
+                            elif getattr(d, "type", None) == "thinking_delta":
+                                yield _Chunk(reasoning=d.thinking)
+                return
+
+            formatted_messages = self._prepare_messages(messages)
+            stream = await self.client.chat.completions.create(
+                model=self.model, messages=formatted_messages, temperature=0,
+                response_format={"type": "json_object"} if json_mode else None, stream=True,
+            )
+            async for chunk in stream:
+                yield chunk
+        except Exception as e:
+            traceback.print_exc()
+            logger.error(f"调用 LLM API 流式请求失败: {str(e)}")
+            raise

@@ -1,9 +1,38 @@
-# QuantFlow 集成:AI 策略顾问节点 + 安全审查
+# QuantFlow 集成:AI 节点 + 单人安全加固 + 内置聊天换 Claude
 
-在 **panda_quantflow 之上叠加**(不改平台源码)一个 AI 策略顾问节点,并附一份对平台的
-**代码级安全审查结论 + 加固清单**。
+在 **panda_quantflow 之上叠加**(尽量不改平台源码),外加一份代码级安全审查。
 
-- `ai_advisor_node.py` —— 一个可直接放进 `custom/` 的自定义 work node。
+**文件清单**
+| 文件 | 作用 | 放哪 |
+|---|---|---|
+| `ai_advisor_node.py` | AI 策略顾问节点(描述+回测→Claude→策略代码) | `src/panda_plugins/custom/` |
+| `ai_strategy_loop_node.py` | **AI 策略自迭代节点**(生成→回测→读回测→再改 多轮闭环) | `src/panda_plugins/custom/`(需与上一个同放) |
+| `run_local_secure.py` | **单人安全启动器**(只绑 127.0.0.1 + 拦跨站请求) | `src/` |
+| `patched/llm-claude.patch` + `patched/llm/*` | **把内置聊天助手改用 Claude**(改平台两个 LLM 文件) | 见第四节 |
+
+> 已全部对着 clone 下来的平台真实代码验证(见各节)。三件事:①单人安全 ②自迭代节点 ③内置聊天换 Claude。
+
+---
+
+## 〇、单人使用的安全加固(先做这个)
+
+平台默认绑 `0.0.0.0`、无鉴权、回测节点直接 `exec`。**单机自己用**最现实的两个洞是:
+局域网别人能扫到你端口、以及**你浏览别的网页时那网页偷偷向 `127.0.0.1:8000` 发请求跑工作流**
+(=在你机器上执行代码)。`run_local_secure.py` 一次性堵住:
+
+```bash
+cp run_local_secure.py  panda_quantflow/src/
+cd panda_quantflow/src
+python run_local_secure.py      # 只绑 127.0.0.1 + LocalGuard 拦截跨站请求
+# 打开 http://127.0.0.1:8000/quantflow/
+```
+它不改平台任何文件,只是换个入口:
+- **只绑 `127.0.0.1`**(不再 0.0.0.0)——局域网扫不到;
+- **LocalGuard 中间件**:拒绝 Origin 非本机的浏览器请求——挡住钓鱼站驱动的未授权操作/RCE;
+- 顺带设 `RUN_MODE=LOCAL`、`MONGO_URI=127.0.0.1`,避免连厂商内网/用 prod 配置。
+
+> 已验证:evil.com 的跨站请求被 403 拦截,本机同源 / 无 Origin 请求正常放行。
+> (这解决"单人本机"。要邀请别人联网,见文末"邀请几个人"清单——需真鉴权 + 沙箱。)
 
 ---
 
@@ -51,6 +80,51 @@ export ANTHROPIC_API_KEY=sk-...
 平台的 LLM 走 `src/panda_server/services/llm/enums/llm_model_type.py` 的 `MODEL_CONFIG`(用 OpenAI SDK 指向 DeepSeek)。
 若也想让内置「回测助手」用 Claude:在 `LLMService.__init__` 里对 `base_url` 含 `anthropic` 的分支改用 Anthropic SDK,
 并在 `MODEL_CONFIG` 加一条 `"Claude": {"model":"claude-opus-4-8", ...}`。本节点默认**直接调 Anthropic**,不依赖这步。
+
+---
+
+## 一之二、AI 策略自迭代节点(生成→回测→读回测→再改)
+
+`ai_strategy_loop_node.py` —— 把整个闭环塞进**一个节点**,自动多轮优化:
+
+- **第 1 轮**:按你的描述让 Claude 生成策略 → 平台检查器校验 → 用平台回测引擎跑 → 读绩效;
+- **第 2..N 轮**:把上一轮的**代码 + 绩效**回喂 Claude 让它改进 → 再跑 → 再读;
+- **结束**:到 `max_rounds`,或达到目标指标(如 `sharpe ≥ 1.5`)提前停;
+- **输出**:`best_code`(最优那版,可连回「股票回测」复跑)+ `best_metrics` + 每轮 `rounds` 历史。
+
+参数:`描述 / 自选 / max_rounds / target_metric(sharpe|back_profit_year|max_drawdown) / target_value /
+回测区间与资金`。复用平台的 `main_workflow_stock.start`(同「股票回测」)、`BacktestCodeChecker`、
+以及顾问节点的 LLM 函数(所以**两个节点文件要一起放**)。
+
+> 已验证(依赖注入 + 假回测,离线可测):达标提前停、代码检查失败→回喂修复→次轮通过、
+> 跑满轮数选最优、回测抛异常被捕获记录——四种路径都对。真实回测需你本机连 Mongo+数据才能跑。
+
+---
+
+## 三、把内置聊天助手改用 Claude
+
+平台的内置助手(回测/因子/代码助手)走 `services/llm/`,默认用 DeepSeek。补丁让它**改用 Claude**:
+
+**应用方式**(改平台两个文件,二选一):
+```bash
+# 方式 A:打补丁
+cd panda_quantflow && git apply /path/to/patched/llm-claude.patch
+# 方式 B:直接替换这两个文件
+cp patched/llm/llm_model_type.py  src/panda_server/services/llm/enums/llm_model_type.py
+cp patched/llm/llm_service.py     src/panda_server/services/llm/base/llm_service.py
+# 然后配 key 并重启
+export ANTHROPIC_API_KEY=sk-...
+```
+改了什么:
+- `MODEL_CONFIG` 加一条 `Claude`(provider=anthropic, model=claude-opus-4-8);
+- `LLMService` 按 provider 分支:Claude 走 Anthropic SDK(自适应思考),**流式输出包了一层
+  兼容 shim**,让原有消费方 `chunk.choices[0].delta.content / .reasoning_content` 无需改动;
+- **默认路由**:一旦设了 `ANTHROPIC_API_KEY`,内置聊天自动走 Claude;没设则**原样回退 DeepSeek**
+  (想强制用 DeepSeek 可设 `LLM_PROVIDER=deepseek`)。前端不用改。
+
+> 已验证(假 Anthropic 客户端):路由到 Claude、system/developer 反馈折叠为 user 且首条为 user、
+> 非流式返回文本、流式 chunk 的 content/reasoning 分离正确;无 key 时 DeepSeek 分支与原版逐字节一致(无回归)。
+> ⚠ 隐私:走 Claude = 你的策略代码/提示发到 Anthropic(出境);走 DeepSeek = 发到深度求索。按合规选。
 
 ---
 
