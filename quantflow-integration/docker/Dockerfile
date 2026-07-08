@@ -30,6 +30,9 @@ COPY ai_advisor_node.py ai_strategy_loop_node.py /app/panda_quantflow/src/panda_
 COPY run_local_secure.py /app/panda_quantflow/src/
 COPY patched/llm-claude.patch /tmp/llm-claude.patch
 RUN cd panda_quantflow && git apply /tmp/llm-claude.patch
+# Mongo 连接器：允许空用户名（本地无鉴权 => 不拼 user:pass@，否则 pymongo 报
+# "The empty string is not valid username"）。整文件替换，避开 f-string 转义坑。
+COPY docker/patched_quantflow/mongodb_handler.py /app/panda_quantflow/src/common/connector/mongodb_handler.py
 
 WORKDIR /app/panda_quantflow/src
 # 容器内绑 0.0.0.0（靠 compose 的 127.0.0.1 端口映射做网络隔离）；LocalGuard 仍拦跨站请求
