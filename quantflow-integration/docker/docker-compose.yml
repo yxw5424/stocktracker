@@ -48,6 +48,7 @@ services:
       MONGO_REPLICA_SET: "rs0"
       DATABASE_NAME: "panda"
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"   # 从同目录 .env 读；留空则内置聊天回退 DeepSeek
+      DEEPSEEK_API_KEY: "${DEEPSEEK_API_KEY:-}"     # 可选：AI 顾问节点的 DeepSeek 后端(国内好开通)
     ports:
       - "127.0.0.1:8000:8000"    # 只绑本机，外部访问不到
     restart: unless-stopped
