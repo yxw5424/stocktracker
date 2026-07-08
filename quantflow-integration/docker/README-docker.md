@@ -45,6 +45,29 @@ pin 了 panda_quantflow 到我审计/打补丁的那个提交,补丁保证能应
 2. 拖出来,填「描述 + 自选股」,运行 → 看它**输出策略代码**(没配 key 时走 mock 兜底,照样出一版能过平台校验的双均线策略);
 3. 配了 `ANTHROPIC_API_KEY` 后,顾问和内置聊天都走 **Claude**。
 
+## 灌你自己那 20 只(回测能真跑)—— 免费,无需 token
+
+空库只能看 UI。要让 AI 出的策略**真跑回测**,得先把你自选股的行情灌进去。用 `akshare`(免费、不用 token),只灌你关心的那几只:
+
+```bash
+# 1) 编辑自选股清单(一行一个代码,600519 或 600519.SH 都行)
+#    Windows:  notepad watchlist.txt
+#    Mac/Lin:  nano watchlist.txt
+#    文件里已有 5 只示例,改成你自己的 20 只。
+
+# 2) 确保平台已经起着(docker compose up --build 那个终端别关),另开一个终端一次性灌数据:
+docker compose run --rm loader
+```
+
+灌完 log 会打印每只写入多少条。它写了平台回测真正读的全部表:日线 `stock_market`、交易日历 `trade_calendar`/`trading_calendar_all`、股票名 `stock_info_new`。
+
+可调(在命令前设环境变量,或写进 `.env`):
+- `START_DATE=20230101`(默认 20240101)、`END_DATE`(默认今天)
+- `LOAD_MINUTE=1` 额外拉 **分时线**(1 分钟,给看盘用;较慢量大,默认不拉)
+- 例:`START_DATE=20230101 LOAD_MINUTE=1 docker compose run --rm loader`
+
+> 想更新到最新行情,随时再跑一次 `docker compose run --rm loader`(按 symbol+date 幂等 upsert,不会重复)。
+
 ## ⚠️ 老实说三点
 
 1. **首次 `--build` 大且慢**:会拉 `torch + tensorflow` 等,镜像好几个 G、可能十几二十分钟。这是平台依赖决定的,不是我加的。

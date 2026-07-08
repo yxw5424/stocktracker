@@ -52,5 +52,28 @@ services:
       - "127.0.0.1:8000:8000"    # 只绑本机，外部访问不到
     restart: unless-stopped
 
+  # 数据导入器：把 watchlist.txt 里的自选股行情用 akshare 灌进 Mongo。
+  # 不随 `up` 启动;手动一次性跑： docker compose run --rm loader
+  loader:
+    profiles: ["load"]
+    build:
+      context: ..
+      dockerfile: docker/loader/Dockerfile
+    depends_on:
+      mongo-init:
+        condition: service_completed_successfully
+    environment:
+      MONGO_URI: "mongo:27017"
+      MONGO_USER: ""             # 与 quantflow 一致：本地无鉴权
+      MONGO_PASSWORD: ""
+      MONGO_AUTH_DB: "admin"
+      MONGO_DB: "panda"
+      START_DATE: "${START_DATE:-20240101}"
+      END_DATE: "${END_DATE:-}"          # 留空=今天
+      LOAD_MINUTE: "${LOAD_MINUTE:-0}"   # 设 1 额外拉分时线(慢、量大)
+      WATCHLIST: "${WATCHLIST:-}"        # 也可用环境变量覆盖 watchlist.txt
+    volumes:
+      - "./watchlist.txt:/data/watchlist.txt:ro"
+
 volumes:
   mongo_data:
