@@ -15,6 +15,9 @@ RUN git clone --depth 1 https://github.com/PandaAI-Tech/panda_factor.git
 RUN pip install -e ./panda_factor/panda_common ./panda_factor/panda_factor \
         ./panda_factor/panda_data ./panda_factor/panda_data_hub \
         ./panda_factor/panda_llm ./panda_factor/panda_factor_server
+# panda_common 只认自己的 config.yaml：把 Mongo 指向容器网络里的 mongo，并用直连(single)
+RUN sed -i 's#127\.0\.0\.1:27017#mongo:27017#; s#MONGO_TYPE: "replica_set"#MONGO_TYPE: "single"#' \
+        /app/panda_factor/panda_common/panda_common/config.yaml
 
 # 2) panda_quantflow —— pin 到已审计/已适配补丁的提交，保证补丁一定能应用
 RUN git clone https://github.com/PandaAI-Tech/panda_quantflow.git && \

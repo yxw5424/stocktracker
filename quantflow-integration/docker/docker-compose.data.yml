@@ -1,0 +1,55 @@
+# 【带数据版】接 PandaAI 网盘预制库，回测能真跑。
+#   docker compose -f docker-compose.data.yml up --build
+# 前提：先把网盘包解压，找到里面的 data/db 目录，在 .env 里设 MONGO_DB_PATH 指向它。
+#
+# 设计：Mongo 挂预制 data/db + 开 --auth(用预制库自带的 panda/panda) + 全部 single 直连
+#      （直连绕开预制库副本集配置里指向 127.0.0.1 的坑，且免 keyfile）。
+name: quantflow-ai-data
+
+services:
+  mongo:
+    image: mongo:7          # 若预制库是更老版本做的、启动报 FCV 错，把 7 换成 6
+    command: ["mongod", "--auth", "--bind_ip_all"]
+    volumes:
+      - "${MONGO_DB_PATH:?请在 .env 里设 MONGO_DB_PATH 指向解压出的 data/db 目录}:/data/db"
+    healthcheck:
+      test: ["CMD", "mongosh", "-u", "panda", "-p", "panda", "--authenticationDatabase", "admin",
+             "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 6s
+      timeout: 5s
+      retries: 30
+
+  quantflow:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    depends_on:
+      mongo:
+        condition: service_healthy
+    environment:
+      RUN_MODE: "LOCAL"
+      MONGO_URI: "mongo:27017"
+      MONGO_USER: "panda"          # 预制库自带账号
+      MONGO_PASSWORD: "panda"
+      MONGO_AUTH_DB: "admin"
+      MONGO_TYPE: "single"         # 直连，绕开副本集主机名坑
+      DATABASE_NAME: "panda"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+    ports:
+      - "127.0.0.1:8000:8000"
+    restart: unless-stopped
+
+  # panda_factor 数据/因子服务（超级图表、因子计算用；股票回测本身走 panda_data 直读 Mongo，可不依赖它）
+  factor:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    depends_on:
+      mongo:
+        condition: service_healthy
+    command: ["python", "/app/panda_factor/panda_factor_server/panda_factor_server/__main__.py"]
+    ports:
+      - "127.0.0.1:8111:8111"
+    restart: unless-stopped
+
+volumes: {}
