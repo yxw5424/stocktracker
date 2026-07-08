@@ -49,6 +49,11 @@ services:
       DATABASE_NAME: "panda"
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"   # 从同目录 .env 读；留空则内置聊天回退 DeepSeek
       DEEPSEEK_API_KEY: "${DEEPSEEK_API_KEY:-}"     # 可选：AI 顾问节点的 DeepSeek 后端(国内好开通)
+      # 代理（可选）：国内直连 api.anthropic.com 不通时，把宿主机代理透传给容器。
+      # Docker Desktop(Win/Mac) 用 host.docker.internal 指宿主机，如 http://host.docker.internal:7890
+      HTTP_PROXY: "${DOCKER_PROXY:-}"
+      HTTPS_PROXY: "${DOCKER_PROXY:-}"
+      NO_PROXY: "mongo,localhost,127.0.0.1,api.deepseek.com"   # 容器内网/国内可直连的不走代理
     ports:
       - "127.0.0.1:8000:8000"    # 只绑本机，外部访问不到
     restart: unless-stopped
