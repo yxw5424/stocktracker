@@ -1,0 +1,56 @@
+# 一条命令跑起来：docker compose up --build
+# 只依赖 Mongo（LOCAL 模式，RabbitMQ/Redis 不需要）。
+# 仅本机可访问（端口映射到 127.0.0.1）。首次构建会拉 torch+tensorflow，较大较慢。
+name: quantflow-ai
+
+services:
+  # 单节点 MongoDB 副本集（QuantFlow 强制要求副本集）
+  mongo:
+    image: mongo:7
+    command: ["mongod", "--replSet", "rs0", "--bind_ip_all"]
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  # 自动初始化副本集 rs0（幂等）
+  mongo-init:
+    image: mongo:7
+    depends_on:
+      mongo:
+        condition: service_healthy
+    restart: "no"
+    entrypoint:
+      - bash
+      - -c
+      - |
+        mongosh --host mongo:27017 --quiet --eval '
+          try { rs.status().ok }
+          catch (e) { rs.initiate({_id: "rs0", members: [{_id: 0, host: "mongo:27017"}]}) }'
+
+  # QuantFlow 本体 + AI 节点 + Claude 补丁
+  quantflow:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    depends_on:
+      mongo-init:
+        condition: service_completed_successfully
+    environment:
+      RUN_MODE: "LOCAL"          # 关键：LOCAL 模式只用 Mongo，不需要 RabbitMQ
+      MONGO_URI: "mongo:27017"
+      MONGO_USER: ""             # 置空 => 不启用鉴权（本地）
+      MONGO_PASSWORD: ""
+      MONGO_TYPE: "replica_set"
+      MONGO_REPLICA_SET: "rs0"
+      DATABASE_NAME: "panda"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"   # 从同目录 .env 读；留空则内置聊天回退 DeepSeek
+    ports:
+      - "127.0.0.1:8000:8000"    # 只绑本机，外部访问不到
+    restart: unless-stopped
+
+volumes:
+  mongo_data:
