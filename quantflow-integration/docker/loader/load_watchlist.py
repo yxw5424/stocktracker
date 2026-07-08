@@ -52,8 +52,8 @@ def read_watchlist() -> list:
     if os.path.exists(path):
         with open(path, encoding="utf-8") as f:
             for line in f:
-                line = line.strip()
-                if line and not line.startswith("#"):
+                line = line.split("#", 1)[0].strip()  # 剥掉行尾注释
+                if line:
                     raw.append(line)
     seen, out = set(), []
     for c in raw:
