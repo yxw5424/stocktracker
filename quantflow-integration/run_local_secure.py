@@ -31,6 +31,11 @@ PORT = int(os.getenv("WEBMINI_PORT", "8000"))
 ALLOWED = {f"127.0.0.1:{PORT}", f"localhost:{PORT}", f"127.0.0.1", "localhost"}
 
 
+# 前端部分请求(如 AI 助手聊天)带官方网关前缀 /pandaApi/quantflow，本地没有网关
+# 会 404 —— 在入口把这个前缀剥掉，等价于官方 nginx 的 rewrite。
+_GATEWAY_PREFIX = "/pandaApi/quantflow"
+
+
 class LocalGuard:
     """纯 ASGI 中间件：拦截 Origin 非本机的 HTTP 请求（防钓鱼站驱动的未授权操作/RCE）。"""
 
@@ -49,6 +54,13 @@ class LocalGuard:
                     await send({"type": "http.response.body",
                                 "body": "LocalGuard: 已拦截跨站请求（仅允许本机访问）".encode()})
                     return
+            path = scope.get("path", "")
+            if path.startswith(_GATEWAY_PREFIX + "/"):
+                scope = dict(scope)
+                scope["path"] = path[len(_GATEWAY_PREFIX):]
+                raw = scope.get("raw_path")
+                if isinstance(raw, (bytes, bytearray)):
+                    scope["raw_path"] = raw[len(_GATEWAY_PREFIX):]
         await self.app(scope, receive, send)
 
 

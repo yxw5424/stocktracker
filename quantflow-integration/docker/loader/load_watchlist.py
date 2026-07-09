@@ -195,6 +195,61 @@ def load_info(db, symbols):
     print(f"[info] 写入 {len(ops)} 只股票信息")
 
 
+# 基准指数：回测引擎把下拉选项映射成这些代码(见平台 main_workflow_stock.py 的 symbol_map，
+# 中证500/1000 的代码是平台自定义的)，按 stock_info type=1 从 index_daily_price 集合读。
+# 缺了它，回测收尾算基准收益时报 'NoneType' object has no attribute 'last'。
+_BENCHMARKS = [
+    # (引擎期望的symbol, 名称, akshare东财指数代码)
+    ("000001.SH", "上证指数", "000001"),
+    ("000300.SH", "沪深300", "000300"),
+    ("000500.SH", "中证500", "000905"),
+    ("001000.SH", "中证1000", "000852"),
+]
+
+
+def load_benchmarks(db, start, end):
+    import akshare as ak
+
+    info_col, bar_col = db["stock_info_new"], db["index_daily_price"]
+    for sym, name, ak_code in _BENCHMARKS:
+        info_col.update_one(
+            {"symbol": sym},
+            {"$set": {"symbol": sym, "code": bare(sym), "name": name, "type": 1}},
+            upsert=True)
+        try:
+            df = ak.index_zh_a_hist(symbol=ak_code, period="daily",
+                                    start_date=start, end_date=end)
+        except Exception as e:
+            print(f"[index][SKIP] {name}({sym}): {e}")
+            continue
+        if df is None or df.empty:
+            print(f"[index][EMPTY] {name}({sym})")
+            continue
+        df = df.rename(columns=_COLMAP).sort_values("date").reset_index(drop=True)
+        prev_close, ops = None, []
+        for _, r in df.iterrows():
+            dstr = _ymd(r["date"])
+            close = float(r["close"])
+            pc = float(prev_close) if prev_close is not None else float(r["open"])
+            ops.append(pymongo.UpdateOne(
+                {"symbol": sym, "date": dstr},
+                {"$set": {
+                    "symbol": sym, "code": bare(sym), "date": dstr,
+                    "trade_date": int(dstr),
+                    "open": float(r["open"]), "high": float(r["high"]),
+                    "low": float(r["low"]), "close": close,
+                    "volume": float(r.get("volume", 0) or 0),
+                    "turnover": float(r.get("turnover", 0) or 0),
+                    "preclose": pc, "pre_close": pc,
+                    "trade_status": "交易",
+                }}, upsert=True))
+            prev_close = close
+        if ops:
+            bar_col.bulk_write(ops, ordered=False)
+            print(f"[index][OK] {name}({sym}): {len(ops)} 条")
+    bar_col.create_index([("symbol", 1), ("date", 1)])
+
+
 def load_minute(db, symbols, start, end):
     import akshare as ak
 
@@ -264,6 +319,7 @@ def main():
     db = mongo_db()
     load_info(db, symbols)
     load_calendar(db, end)
+    load_benchmarks(db, start, end)
     load_daily(db, symbols, start, end)
     if os.getenv("LOAD_MINUTE") == "1":
         load_minute(db, symbols, start, end)
