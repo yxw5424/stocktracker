@@ -106,3 +106,28 @@ docker compose -f docker-compose.data.yml up --build
 ## 安全
 
 容器端口只映射到 `127.0.0.1`(外部访问不到)+ 入口用 `run_local_secure.py`(LocalGuard 拦跨站请求)。这满足**单人本机**。要邀请别人联网,另见上级目录 README 的"邀请几个人"清单(需真鉴权 + 沙箱)。
+
+## AI 信号复核官(模拟盘,每日一跑)
+
+「规则出信号 → agent 收集资金流/新闻/大盘事实 → 决定 执行/半仓/否决(全权模式下还可主动买卖)
+→ 纸面账本执行 → 5个交易日后自动复盘打分 → 沉淀经验反哺后续决策」。
+
+```bash
+# 每个交易日收盘后(如 15:30)跑,两步:先更新行情,再复核
+docker compose run --rm loader
+docker compose run --rm reviewer     # 首次加 --build
+```
+
+报告输出到 `docker/reports/review_YYYYMMDD.md`;决策/持仓/经验存在 Mongo
+(`ai_review_decisions` / `ai_review_positions` / `ai_review_lessons`)。
+
+可调(.env):`PROVIDER=deepseek|claude`、`FULL_AUTH=1|0`(全权模式开关)、`EVAL_DAYS=5`。
+
+Windows 定时(任务计划程序,工作日 15:30 自动跑):
+```
+schtasks /create /tn "AI-Review" /sc weekly /d MON,TUE,WED,THU,FRI /st 15:30 ^
+  /tr "cmd /c cd /d E:\dev\pq\stocktracker\quantflow-integration\docker && docker compose run --rm loader && docker compose run --rm reviewer"
+```
+
+⚠️ 纯模拟:虚拟持仓、不接实盘。跑一两个月后对比「纯规则 vs AI复核后」的对错统计
+(报告里的复盘部分),用数据决定要不要信它。

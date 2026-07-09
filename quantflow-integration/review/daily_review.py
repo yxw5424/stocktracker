@@ -1,0 +1,445 @@
+# -*- coding: utf-8 -*-
+"""
+AI 信号复核官 —— 「规则出信号 → agent 收资料复核 → 决定执行/否决 → 事后总结」每日闭环。
+
+流程(每个交易日收盘后跑一次):
+  1. 信号   用趋势波段规则扫自选股(数据读 Mongo 的 stock_market),对照虚拟持仓账本
+            得出今天的 买入/卖出 信号。
+  2. 复核   对每个信号收集当时的事实:主力/散户资金流向、近几日新闻标题、
+            基准指数趋势、个股近期表现 —— 打包发给 LLM。
+  3. 决定   LLM 只有三种权力:执行 / 半仓 / 否决,必须给理由。
+            决定 + 资料快照写入 Mongo(ai_review_decisions),虚拟持仓账本同步更新。
+  4. 总结   回看 EVAL_DAYS 个交易日前的决定,算对错(否决的买入躲掉跌了吗?
+            放行的赚了吗?),让 LLM 写复盘,存为「经验」(ai_review_lessons);
+            最近经验会喂回给之后的每次决策 —— 记忆闭环。
+输出:reports/review_YYYYMMDD.md 决策报告。
+
+安全边界:纯纸面(虚拟持仓),不接实盘;AI 无反向开仓权。
+环境变量:MONGO_URI/MONGO_DB 等同 loader;DEEPSEEK_API_KEY 或 ANTHROPIC_API_KEY;
+         PROVIDER=deepseek|claude|mock;EVAL_DAYS=5;REPORT_DIR=/reports
+"""
+import os
+import json
+import datetime
+import urllib.parse
+
+import pymongo
+import pandas as pd
+
+PROVIDER = os.getenv("PROVIDER", "deepseek").lower()
+FULL_AUTH = os.getenv("FULL_AUTH", "1") == "1"   # 全权模式:agent 可主动发起买卖(纸面)
+EVAL_DAYS = int(os.getenv("EVAL_DAYS", "5"))
+REPORT_DIR = os.getenv("REPORT_DIR", "/reports")
+BENCH = "000300.SH"     # 复核用基准:沪深300
+MAX_POS = 5             # 虚拟账本最多同时持有
+COL_POS, COL_DEC, COL_LES = "ai_review_positions", "ai_review_decisions", "ai_review_lessons"
+
+
+# --------------------------------------------------------------------------- #
+# 基础设施
+# --------------------------------------------------------------------------- #
+def mongo_db():
+    host = os.getenv("MONGO_URI", "mongo:27017")
+    user, pwd = os.getenv("MONGO_USER", ""), os.getenv("MONGO_PASSWORD", "")
+    authdb = os.getenv("MONGO_AUTH_DB", "admin")
+    auth = f"{user}:{urllib.parse.quote_plus(pwd)}@" if user else ""
+    cli = pymongo.MongoClient(f"mongodb://{auth}{host}/{authdb}", serverSelectionTimeoutMS=30000)
+    cli.admin.command("ping")
+    return cli[os.getenv("MONGO_DB", "panda")]
+
+
+def read_watchlist():
+    path = os.getenv("WATCHLIST_FILE", "/data/watchlist.txt")
+    out = []
+    if os.path.exists(path):
+        for line in open(path, encoding="utf-8"):
+            line = line.split("#", 1)[0].strip()
+            if line:
+                code = line.upper()
+                if "." not in code:
+                    code += ".SH" if code[0] in "69" else (".BJ" if code[0] == "8" or code[:3] in ("920", "430") else ".SZ")
+                out.append(code)
+    env = os.getenv("WATCHLIST", "")
+    out += [c.strip().upper() for c in env.split(",") if c.strip()]
+    return list(dict.fromkeys(out))
+
+
+def load_bars(db, symbols, days=200, collection="stock_market"):
+    """从 Mongo 取近 N 条日线,返回 {symbol: DataFrame(date asc)}。"""
+    out = {}
+    for sym in symbols:
+        docs = list(db[collection].find({"symbol": sym}, {"_id": 0})
+                    .sort("date", -1).limit(days))
+        if docs:
+            out[sym] = pd.DataFrame(docs).sort_values("date").reset_index(drop=True)
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# ① 信号:趋势波段规则(与 flow 里的策略A同思路,纯 pandas 可测)
+# --------------------------------------------------------------------------- #
+def trend_signals(bars, positions):
+    """bars: {sym: df};positions: {sym: {entry_price, high_since}}
+    返回 [{symbol, side, price, rule}]。买入:MA20上穿MA60且同升、放量;
+    卖出:破MA20 / 高点回撤10% / 止损8%。"""
+    signals = []
+    for sym, df in bars.items():
+        if len(df) < 70:
+            continue
+        c = df["close"].astype(float)
+        v = df["volume"].astype(float)
+        ma20, ma60 = c.rolling(20).mean(), c.rolling(60).mean()
+        vol20 = v.rolling(20).mean()
+        i = len(df) - 1
+        price = float(c.iloc[i])
+
+        if sym in positions:
+            p = positions[sym]
+            high = max(float(p.get("high_since", price)), price)
+            entry = float(p["entry_price"])
+            if price < float(ma20.iloc[i]):
+                signals.append({"symbol": sym, "side": "卖出", "price": price,
+                                "rule": f"收盘 {price:.2f} 跌破20日线 {ma20.iloc[i]:.2f}"})
+            elif price <= high * 0.90:
+                signals.append({"symbol": sym, "side": "卖出", "price": price,
+                                "rule": f"较持仓高点 {high:.2f} 回撤超10%"})
+            elif price <= entry * 0.92:
+                signals.append({"symbol": sym, "side": "卖出", "price": price,
+                                "rule": f"跌破止损线(成本 {entry:.2f} 的92%)"})
+        else:
+            if len(positions) >= MAX_POS:
+                continue
+            cross = (ma20.iloc[i] > ma60.iloc[i]) and (ma20.iloc[i - 1] <= ma60.iloc[i - 1])
+            rising = ma20.iloc[i] > ma20.iloc[i - 3] and ma60.iloc[i] > ma60.iloc[i - 3]
+            heavy = v.iloc[i] > 1.5 * vol20.iloc[i]
+            if cross and rising and heavy:
+                signals.append({"symbol": sym, "side": "买入", "price": price,
+                                "rule": "MA20上穿MA60且双线上行,当日放量>1.5倍20日均量"})
+    return signals
+
+
+# --------------------------------------------------------------------------- #
+# ② 复核资料收集(外部源全部允许失败,缺哪块就少哪块)
+# --------------------------------------------------------------------------- #
+def gather_context(db, sym, bars):
+    ctx = {}
+    df = bars.get(sym)
+    if df is not None and len(df) >= 21:
+        c = df["close"].astype(float)
+        ctx["近5日涨跌%"] = round((c.iloc[-1] / c.iloc[-6] - 1) * 100, 2)
+        ctx["近20日涨跌%"] = round((c.iloc[-1] / c.iloc[-21] - 1) * 100, 2)
+    bench = load_bars(db, [BENCH], days=70, collection="index_daily_price").get(BENCH)
+    if bench is not None and len(bench) >= 61:
+        bc = bench["close"].astype(float)
+        ctx["基准沪深300近5日%"] = round((bc.iloc[-1] / bc.iloc[-6] - 1) * 100, 2)
+        ctx["基准位于60日线上方"] = bool(bc.iloc[-1] > bc.rolling(60).mean().iloc[-1])
+    code = sym.split(".")[0]
+    try:
+        import akshare as ak
+        ff = ak.stock_individual_fund_flow(stock=code,
+                                           market={"SH": "sh", "SZ": "sz"}.get(sym[-2:], "sh"))
+        if ff is not None and not ff.empty:
+            last = ff.iloc[-1]
+            for col in ff.columns:
+                if "主力净流入" in col and "占比" not in col:
+                    ctx["当日主力净流入(万)"] = round(float(last[col]) / 1e4, 1)
+                if "主力净流入" in col and "占比" in col:
+                    ctx["主力净流入占比%"] = float(last[col])
+    except Exception as e:
+        ctx["资金流向"] = f"获取失败({type(e).__name__})"
+    try:
+        import akshare as ak
+        news = ak.stock_news_em(symbol=code)
+        if news is not None and not news.empty:
+            title_col = [c for c in news.columns if "标题" in c]
+            if title_col:
+                ctx["近期新闻标题"] = news[title_col[0]].head(5).tolist()
+    except Exception as e:
+        ctx["新闻"] = f"获取失败({type(e).__name__})"
+    return ctx
+
+
+# --------------------------------------------------------------------------- #
+# ③ LLM 决定(权力受限:执行/半仓/否决)
+# --------------------------------------------------------------------------- #
+_SYS = ("你是A股波段策略的风控复核官。规则策略已给出信号,你结合当下事实决定:"
+        "「执行」「半仓」或「否决」。你没有反向操作权。原则:事实与信号方向冲突时"
+        "(如买入信号但主力大幅流出+利空新闻+基准走弱)倾向否决或半仓;事实支持或中性时放行;"
+        "卖出信号原则上不轻易否决(风控优先)。输出 JSON:"
+        '{"decision":"执行|半仓|否决","reason":"三句话以内","confidence":0到1}')
+
+
+def _decide_prompt(sig, ctx, lessons):
+    parts = [f"【信号】{sig['side']} {sig['symbol']} @ {sig['price']}\n触发规则:{sig['rule']}",
+             f"【当下事实】\n{json.dumps(ctx, ensure_ascii=False, indent=1)}"]
+    if lessons:
+        parts.append("【你过往决策的经验教训】\n" + "\n".join(f"- {x}" for x in lessons))
+    parts.append("请给出决定(JSON)。")
+    return "\n\n".join(parts)
+
+
+def llm_decide(sig, ctx, lessons):
+    prompt = _decide_prompt(sig, ctx, lessons)
+    try:
+        if PROVIDER == "claude" and os.getenv("ANTHROPIC_API_KEY"):
+            import anthropic
+            r = anthropic.Anthropic().messages.create(
+                model="claude-opus-4-8", max_tokens=1024,
+                system=_SYS, messages=[{"role": "user", "content": prompt}])
+            txt = "".join(b.text for b in r.content if b.type == "text")
+        elif os.getenv("DEEPSEEK_API_KEY"):
+            import openai
+            cli = openai.OpenAI(api_key=os.getenv("DEEPSEEK_API_KEY"),
+                                base_url="https://api.deepseek.com/v1")
+            r = cli.chat.completions.create(
+                model="deepseek-chat", temperature=0,
+                response_format={"type": "json_object"},
+                messages=[{"role": "system", "content": _SYS},
+                          {"role": "user", "content": prompt}])
+            txt = r.choices[0].message.content
+        else:
+            return {"decision": "执行", "reason": "无可用 LLM(mock):按规则默认执行", "confidence": 0.5}
+        txt = txt.strip()
+        if txt.startswith("```"):
+            txt = txt.strip("`").lstrip("json").strip()
+        d = json.loads(txt[txt.index("{"): txt.rindex("}") + 1])
+        if d.get("decision") not in ("执行", "半仓", "否决"):
+            d["decision"] = "执行"
+        return d
+    except Exception as e:
+        return {"decision": "执行", "reason": f"复核失败({type(e).__name__}),按规则默认执行", "confidence": 0.3}
+
+
+# --------------------------------------------------------------------------- #
+# ③b 全权模式:agent 纵览全局后可主动发起操作(纸面执行,同样记档、同样被评分)
+# --------------------------------------------------------------------------- #
+def agent_extra_actions(db, bars, positions, lessons):
+    overview = {}
+    for sym, df in bars.items():
+        if len(df) >= 21:
+            c = df["close"].astype(float)
+            overview[sym] = {"近5日%": round((c.iloc[-1] / c.iloc[-6] - 1) * 100, 1),
+                             "近20日%": round((c.iloc[-1] / c.iloc[-21] - 1) * 100, 1),
+                             "持仓": sym in positions}
+    pos_txt = [{"symbol": s, "成本": p["entry_price"],
+                "现价": float(bars[s]["close"].iloc[-1]) if s in bars else None}
+               for s, p in positions.items()]
+    prompt = (
+        "你是全权模式下的纸面盘操盘手。规则信号之外,你每天最多可以主动发起 2 笔操作"
+        "(买入未持有的自选股 / 卖出当前持仓),也可以不动。原则:有明确事实依据才动,"
+        "宁缺毋滥;持仓超过5只不再买。\n"
+        f"【自选股概况】\n{json.dumps(overview, ensure_ascii=False)}\n"
+        f"【当前持仓】\n{json.dumps(pos_txt, ensure_ascii=False)}\n"
+        + (("【经验】\n" + "\n".join(f"- {x}" for x in lessons) + "\n") if lessons else "")
+        + '输出 JSON:{"actions":[{"symbol":"600519.SH","action":"买入|卖出","reason":"一句话"}]},'
+          '不动则 actions 为空数组。')
+    try:
+        if PROVIDER == "claude" and os.getenv("ANTHROPIC_API_KEY"):
+            import anthropic
+            r = anthropic.Anthropic().messages.create(
+                model="claude-opus-4-8", max_tokens=1024,
+                messages=[{"role": "user", "content": prompt}])
+            txt = "".join(b.text for b in r.content if b.type == "text")
+        elif os.getenv("DEEPSEEK_API_KEY"):
+            import openai
+            cli = openai.OpenAI(api_key=os.getenv("DEEPSEEK_API_KEY"),
+                                base_url="https://api.deepseek.com/v1")
+            r = cli.chat.completions.create(
+                model="deepseek-chat", temperature=0,
+                response_format={"type": "json_object"},
+                messages=[{"role": "user", "content": prompt}])
+            txt = r.choices[0].message.content
+        else:
+            return []
+        acts = json.loads(txt[txt.index("{"): txt.rindex("}") + 1]).get("actions", [])[:2]
+        out = []
+        for a in acts:
+            sym, act = a.get("symbol", ""), a.get("action", "")
+            if act == "买入" and sym in bars and sym not in positions and len(positions) < MAX_POS:
+                out.append(a)
+            elif act == "卖出" and sym in positions:
+                out.append(a)
+        return out
+    except Exception as e:
+        print(f"[全权模式] 主动决策失败(跳过):{e}")
+        return []
+
+
+# --------------------------------------------------------------------------- #
+# ④ 总结:回看旧决定 → 经验
+# --------------------------------------------------------------------------- #
+def evaluate_old_decisions(db, bars, today):
+    """给 ≥EVAL_DAYS 天前、未评估的决定打分,返回评估文本列表。"""
+    outs = []
+    for d in db[COL_DEC].find({"evaluated": {"$ne": True}}):
+        df = bars.get(d["symbol"])
+        if df is None:
+            continue
+        after = df[df["date"] > d["date"]]
+        if len(after) < EVAL_DAYS:
+            continue
+        chg = (float(after["close"].iloc[EVAL_DAYS - 1]) / float(d["price"]) - 1) * 100
+        if "买入" in d["side"]:
+            good = (chg > 0) if d["decision"] in ("执行", "半仓") else (chg < 0)
+            verdict = ("放行买入后涨" if chg > 0 else "放行买入后跌") if d["decision"] != "否决" \
+                else ("否决买入,躲过下跌" if chg < 0 else "否决买入,错过上涨")
+        else:
+            good = (chg < 0) if d["decision"] in ("执行", "半仓") else (chg > 0)
+            verdict = ("放行卖出,后续确实跌" if chg < 0 else "放行卖出,卖飞了") if d["decision"] != "否决" \
+                else ("否决卖出,拿住了上涨" if chg > 0 else "否决卖出,多挨了跌")
+        txt = (f"{d['date']} {d['side']} {d['symbol']} 决定={d['decision']}"
+               f"(理由:{d.get('reason','')[:60]}) → {EVAL_DAYS}日后 {chg:+.1f}%,{verdict}")
+        db[COL_DEC].update_one({"_id": d["_id"]},
+                               {"$set": {"evaluated": True, "outcome_pct": round(chg, 2),
+                                         "outcome_good": bool(good), "verdict": verdict}})
+        outs.append(txt)
+    return outs
+
+
+def summarize_lessons(db, evals, today):
+    if not evals:
+        return None
+    stat = list(db[COL_DEC].aggregate([
+        {"$match": {"evaluated": True}},
+        {"$group": {"_id": "$outcome_good", "n": {"$sum": 1}}}]))
+    stat_txt = json.dumps({("正确" if s["_id"] else "错误"): s["n"] for s in stat}, ensure_ascii=False)
+    prompt = ("以下是你(风控复核官)过往决定的最新评估结果:\n" + "\n".join(evals) +
+              f"\n\n累计正确/错误分布:{stat_txt}\n"
+              "请写不超过3条、每条一句话的可执行经验(如\"主力净流出超X时否决买入是对的\"),"
+              "输出 JSON:{\"lessons\":[\"...\"]}")
+    lessons = []
+    try:
+        if PROVIDER == "claude" and os.getenv("ANTHROPIC_API_KEY"):
+            import anthropic
+            r = anthropic.Anthropic().messages.create(
+                model="claude-opus-4-8", max_tokens=1024,
+                messages=[{"role": "user", "content": prompt}])
+            txt = "".join(b.text for b in r.content if b.type == "text")
+            lessons = json.loads(txt[txt.index("{"): txt.rindex("}") + 1]).get("lessons", [])
+        elif os.getenv("DEEPSEEK_API_KEY"):
+            import openai
+            cli = openai.OpenAI(api_key=os.getenv("DEEPSEEK_API_KEY"),
+                                base_url="https://api.deepseek.com/v1")
+            r = cli.chat.completions.create(
+                model="deepseek-chat", temperature=0,
+                response_format={"type": "json_object"},
+                messages=[{"role": "user", "content": prompt}])
+            lessons = json.loads(r.choices[0].message.content).get("lessons", [])
+    except Exception:
+        lessons = []
+    doc = {"date": today, "evals": evals, "lessons": lessons}
+    db[COL_LES].insert_one(doc)
+    return doc
+
+
+def recent_lessons(db, n=5):
+    out = []
+    for doc in db[COL_LES].find().sort("date", -1).limit(3):
+        out += doc.get("lessons", [])
+    return out[:n]
+
+
+# --------------------------------------------------------------------------- #
+# 主流程
+# --------------------------------------------------------------------------- #
+def main():
+    db = mongo_db()
+    watch = read_watchlist()
+    if not watch:
+        print("自选股为空(watchlist.txt / WATCHLIST)")
+        return
+    bars = load_bars(db, watch)
+    if not bars:
+        print("Mongo 里没有行情,请先跑 loader")
+        return
+    today = max(df["date"].iloc[-1] for df in bars.values())
+    print(f"复核日:{today},自选 {len(watch)} 只,有数据 {len(bars)} 只")
+
+    positions = {p["symbol"]: p for p in db[COL_POS].find()}
+    signals = trend_signals(bars, positions)
+    print(f"触发信号 {len(signals)} 条")
+
+    # 更新持仓高点(用于回撤退出)
+    for sym, p in positions.items():
+        if sym in bars:
+            price = float(bars[sym]["close"].iloc[-1])
+            if price > float(p.get("high_since", 0)):
+                db[COL_POS].update_one({"symbol": sym}, {"$set": {"high_since": price}})
+
+    lessons = recent_lessons(db)
+    lines = [f"# AI 信号复核报告 {today}", ""]
+    if lessons:
+        lines += ["## 当前记忆中的经验", *[f"- {x}" for x in lessons], ""]
+
+    lines.append(f"## 今日信号与决定({len(signals)} 条)")
+    if not signals:
+        lines.append("今日无信号。")
+    for sig in signals:
+        ctx = gather_context(db, sig["symbol"], bars)
+        d = llm_decide(sig, ctx, lessons)
+        db[COL_DEC].insert_one({
+            "date": today, "symbol": sig["symbol"], "side": sig["side"],
+            "price": sig["price"], "rule": sig["rule"], "context": ctx,
+            "decision": d["decision"], "reason": d.get("reason", ""),
+            "confidence": d.get("confidence"), "evaluated": False})
+        # 虚拟账本(纸面):执行/半仓的买入入账,执行的卖出出账
+        if sig["side"] == "买入" and d["decision"] in ("执行", "半仓"):
+            db[COL_POS].update_one(
+                {"symbol": sig["symbol"]},
+                {"$set": {"symbol": sig["symbol"], "entry_price": sig["price"],
+                          "entry_date": today, "high_since": sig["price"],
+                          "half": d["decision"] == "半仓"}}, upsert=True)
+        if sig["side"] == "卖出" and d["decision"] in ("执行", "半仓"):
+            db[COL_POS].delete_one({"symbol": sig["symbol"]})
+        icon = {"执行": "✅", "半仓": "🌓", "否决": "⛔"}[d["decision"]]
+        lines += [f"### {icon} {sig['side']} {sig['symbol']} @ {sig['price']}",
+                  f"- 触发规则:{sig['rule']}",
+                  f"- 关键事实:{json.dumps(ctx, ensure_ascii=False)[:400]}",
+                  f"- **AI 决定:{d['decision']}**(信心 {d.get('confidence')}) —— {d.get('reason','')}", ""]
+
+    # 全权模式:agent 主动操作(纸面)
+    if FULL_AUTH:
+        positions = {p["symbol"]: p for p in db[COL_POS].find()}
+        extras = agent_extra_actions(db, bars, positions, lessons)
+        if extras:
+            lines.append("## AI 主动操作(全权模式)")
+        for a in extras:
+            sym = a["symbol"]
+            price = float(bars[sym]["close"].iloc[-1])
+            side = f"AI主动{a['action']}"
+            db[COL_DEC].insert_one({
+                "date": today, "symbol": sym, "side": side, "price": price,
+                "rule": "AI自主决策(全权模式)", "context": {},
+                "decision": "执行", "reason": a.get("reason", ""),
+                "confidence": None, "evaluated": False})
+            if a["action"] == "买入":
+                db[COL_POS].update_one({"symbol": sym},
+                    {"$set": {"symbol": sym, "entry_price": price, "entry_date": today,
+                              "high_since": price, "by_agent": True}}, upsert=True)
+            else:
+                db[COL_POS].delete_one({"symbol": sym})
+            lines += [f"- 🤖 {a['action']} {sym} @ {price} —— {a.get('reason','')}"]
+        if extras:
+            lines.append("")
+
+    evals = evaluate_old_decisions(db, bars, today)
+    if evals:
+        lines += ["## 对过往决定的复盘", *[f"- {x}" for x in evals], ""]
+        summ = summarize_lessons(db, evals, today)
+        if summ and summ.get("lessons"):
+            lines += ["### 新沉淀的经验", *[f"- {x}" for x in summ["lessons"]], ""]
+
+    pos_now = list(db[COL_POS].find({}, {"_id": 0}))
+    lines += ["## 当前虚拟持仓", "(空仓)" if not pos_now else
+              "\n".join(f"- {p['symbol']} 入场 {p['entry_price']} @ {p['entry_date']}"
+                        f"{'(半仓)' if p.get('half') else ''}" for p in pos_now), ""]
+
+    os.makedirs(REPORT_DIR, exist_ok=True)
+    path = os.path.join(REPORT_DIR, f"review_{today}.md")
+    open(path, "w", encoding="utf-8").write("\n".join(lines))
+    print("\n".join(lines))
+    print(f"\n报告已写入 {path}")
+
+
+if __name__ == "__main__":
+    main()

@@ -86,5 +86,34 @@ services:
     volumes:
       - "./watchlist.txt:/data/watchlist.txt:ro"
 
+  # AI 信号复核官:收盘后跑一次 → 信号+复核+纸面执行+复盘报告(reports/ 目录)。
+  # 手动:docker compose run --rm reviewer   (建议先跑一次 loader 更新行情)
+  reviewer:
+    profiles: ["review"]
+    build:
+      context: ..
+      dockerfile: docker/review/Dockerfile
+    depends_on:
+      mongo-init:
+        condition: service_completed_successfully
+    environment:
+      MONGO_URI: "mongo:27017"
+      MONGO_USER: ""
+      MONGO_PASSWORD: ""
+      MONGO_AUTH_DB: "admin"
+      MONGO_DB: "panda"
+      PROVIDER: "${PROVIDER:-deepseek}"
+      FULL_AUTH: "${FULL_AUTH:-1}"        # 1=全权模式(agent 可主动买卖,纸面)
+      EVAL_DAYS: "${EVAL_DAYS:-5}"
+      DEEPSEEK_API_KEY: "${DEEPSEEK_API_KEY:-}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      # 资金流/新闻走东财新浪、决策走 deepseek,全直连(防宿主代理注入)
+      HTTP_PROXY: ""
+      HTTPS_PROXY: ""
+      NO_PROXY: "*"
+    volumes:
+      - "./watchlist.txt:/data/watchlist.txt:ro"
+      - "./reports:/reports"
+
 volumes:
   mongo_data:
