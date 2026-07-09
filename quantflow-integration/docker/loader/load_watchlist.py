@@ -19,10 +19,26 @@
 """
 import os
 import sys
+import time
 import datetime
 import urllib.parse
 
 import pymongo
+
+
+def _retry(fn, what, tries=3, delay=2):
+    """带退避重试;全部失败抛最后一个异常。"""
+    last = None
+    for i in range(tries):
+        try:
+            return fn()
+        except Exception as e:
+            last = e
+            if i < tries - 1:
+                print(f"[retry] {what} 第{i + 1}次失败({e}),{delay}s 后重试")
+                time.sleep(delay)
+                delay *= 2
+    raise last
 
 
 def norm_symbol(code: str) -> str:
@@ -97,23 +113,51 @@ def _ymdhm(x) -> str:
     return s.replace(" ", "")[:12]
 
 
-def load_daily(db, symbols, start, end):
+def _fetch_stock_daily(sym, start, end):
+    """拉个股日线,返回标准化 DataFrame(volume 单位:股, turnover 单位:元)。
+    源1: 东财(stock_zh_a_hist) → 源2: 新浪(stock_zh_a_daily)。"""
     import akshare as ak
 
+    b = bare(sym)
+
+    def em():
+        df = ak.stock_zh_a_hist(symbol=b, period="daily",
+                                start_date=start, end_date=end, adjust="qfq")
+        if df is None or df.empty:
+            return df
+        df = df.rename(columns=_COLMAP)
+        df["volume"] = df["volume"].astype(float) * 100.0   # 东财单位:手 → 股
+        return df
+
+    def sina():
+        pre = {"SH": "sh", "SZ": "sz", "BJ": "bj"}[sym.rsplit(".", 1)[1]]
+        df = ak.stock_zh_a_daily(symbol=f"{pre}{b}", start_date=start,
+                                 end_date=end, adjust="qfq")
+        if df is None or df.empty:
+            return df
+        df = df.rename(columns={"amount": "turnover"})       # 新浪列名已是英文,volume 单位:股
+        return df
+
+    try:
+        return _retry(em, f"东财日线 {sym}", tries=2)
+    except Exception as e:
+        print(f"[daily] 东财不通({e}),换新浪源:{sym}")
+        return _retry(sina, f"新浪日线 {sym}", tries=3)
+
+
+def load_daily(db, symbols, start, end):
     col = db["stock_market"]
     total = 0
     for sym in symbols:
         b = bare(sym)
         try:
-            df = ak.stock_zh_a_hist(symbol=b, period="daily",
-                                    start_date=start, end_date=end, adjust="qfq")
+            df = _fetch_stock_daily(sym, start, end)
         except Exception as e:
             print(f"[daily][SKIP] {sym}: {e}")
             continue
         if df is None or df.empty:
             print(f"[daily][EMPTY] {sym}")
             continue
-        df = df.rename(columns=_COLMAP)
         df = df.sort_values("date").reset_index(drop=True)
         prev_close = None
         ops = []
@@ -126,7 +170,7 @@ def load_daily(db, symbols, start, end):
                 "date": dstr, "trade_date": int(dstr),
                 "open": float(r["open"]), "high": float(r["high"]),
                 "low": float(r["low"]), "close": close,
-                "volume": float(r["volume"]) * 100.0,   # akshare 单位是手,×100 转股
+                "volume": float(r["volume"]),   # 已在 _fetch_stock_daily 里统一为「股」
                 "turnover": float(r.get("turnover", 0) or 0),
                 "preclose": pc, "pre_close": pc,
                 "limit_up": round(pc * 1.1, 2), "limit_down": round(pc * 0.9, 2),
@@ -199,33 +243,58 @@ def load_info(db, symbols):
 # 中证500/1000 的代码是平台自定义的)，按 stock_info type=1 从 index_daily_price 集合读。
 # 缺了它，回测收尾算基准收益时报 'NoneType' object has no attribute 'last'。
 _BENCHMARKS = [
-    # (引擎期望的symbol, 名称, akshare东财指数代码)
-    ("000001.SH", "上证指数", "000001"),
-    ("000300.SH", "沪深300", "000300"),
-    ("000500.SH", "中证500", "000905"),
-    ("001000.SH", "中证1000", "000852"),
+    # (引擎期望的symbol, 名称, 东财代码, 新浪代码)
+    ("000001.SH", "上证指数", "000001", "sh000001"),
+    ("000300.SH", "沪深300", "000300", "sh000300"),
+    ("000500.SH", "中证500", "000905", "sh000905"),
+    ("001000.SH", "中证1000", "000852", "sh000852"),
 ]
 
 
-def load_benchmarks(db, start, end):
+def _fetch_index_daily(name, ak_code, sina_sym, start, end):
+    """拉指数日线,东财不通换新浪。返回列名标准化后的 DataFrame。"""
     import akshare as ak
+    import pandas as pd
 
+    def em():
+        df = ak.index_zh_a_hist(symbol=ak_code, period="daily",
+                                start_date=start, end_date=end)
+        if df is None or df.empty:
+            return df
+        return df.rename(columns=_COLMAP)
+
+    def sina():
+        df = ak.stock_zh_index_daily(symbol=sina_sym)   # 全历史,英文列名
+        if df is None or df.empty:
+            return df
+        df["date"] = df["date"].astype(str)
+        d0 = f"{start[:4]}-{start[4:6]}-{start[6:8]}"
+        d1 = f"{end[:4]}-{end[4:6]}-{end[6:8]}"
+        return df[(df["date"] >= d0) & (df["date"] <= d1)].reset_index(drop=True)
+
+    try:
+        return _retry(em, f"东财指数 {name}", tries=2)
+    except Exception as e:
+        print(f"[index] 东财不通({e}),换新浪源:{name}")
+        return _retry(sina, f"新浪指数 {name}", tries=3)
+
+
+def load_benchmarks(db, start, end):
     info_col, bar_col = db["stock_info_new"], db["index_daily_price"]
-    for sym, name, ak_code in _BENCHMARKS:
+    for sym, name, ak_code, sina_sym in _BENCHMARKS:
         info_col.update_one(
             {"symbol": sym},
             {"$set": {"symbol": sym, "code": bare(sym), "name": name, "type": 1}},
             upsert=True)
         try:
-            df = ak.index_zh_a_hist(symbol=ak_code, period="daily",
-                                    start_date=start, end_date=end)
+            df = _fetch_index_daily(name, ak_code, sina_sym, start, end)
         except Exception as e:
             print(f"[index][SKIP] {name}({sym}): {e}")
             continue
         if df is None or df.empty:
             print(f"[index][EMPTY] {name}({sym})")
             continue
-        df = df.rename(columns=_COLMAP).sort_values("date").reset_index(drop=True)
+        df = df.sort_values("date").reset_index(drop=True)
         prev_close, ops = None, []
         for _, r in df.iterrows():
             dstr = _ymd(r["date"])
@@ -303,7 +372,7 @@ def ensure_indexes(db):
     db["trading_calendar_all"].create_index([("sort_idx", 1)])
     db["stock_info_new"].create_index([("symbol", 1)])
     db["stock_market_ticket_zstd"].create_index([("symbol", 1), ("date", 1)])
-    print("[index] OK")
+    print("[db索引] OK")
 
 
 def main():
