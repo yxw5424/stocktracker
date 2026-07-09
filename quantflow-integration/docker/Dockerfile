@@ -33,6 +33,9 @@ RUN cd panda_quantflow && git apply /tmp/llm-claude.patch
 # Mongo 连接器：允许空用户名（本地无鉴权 => 不拼 user:pass@，否则 pymongo 报
 # "The empty string is not valid username"）。整文件替换，避开 f-string 转义坑。
 COPY docker/patched_quantflow/mongodb_handler.py /app/panda_quantflow/src/common/connector/mongodb_handler.py
+# 股票回测节点：平台原代码 except 里用 e.message(不存在)把真实错误吞成
+# AttributeError；换成打印真实异常+traceback 尾部，方便排错。
+COPY docker/patched_quantflow/backtest_stock_node.py /app/panda_quantflow/src/panda_plugins/internal/backtest_stock_node.py
 
 WORKDIR /app/panda_quantflow/src
 # 容器内绑 0.0.0.0（靠 compose 的 127.0.0.1 端口映射做网络隔离）；LocalGuard 仍拦跨站请求
