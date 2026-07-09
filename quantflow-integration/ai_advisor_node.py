@@ -62,24 +62,57 @@ def read_backtest(back_id: str, log=None) -> dict:
         return {}
 
 
+# 硬性 API 白名单 —— 逐条对照过引擎源码(bar_map/stock_api/stock_account 等)。
+# 目的：堵死 LLM 发明不存在函数(如 stock_api_daily)与不防停牌两类高频错误。
+HARD_RULES = """
+【硬性约束 —— 违反任何一条代码必然报错，逐条自查后再输出】
+1. 头两行必须原样出现：
+   from panda_backtest.api.api import *
+   from panda_backtest.api.stock_api import *
+2. 你能用的全部数据/交易接口只有下面这些，签名必须一字不差：
+   - bar[symbol]：当前bar。symbol 必须是 '600519.SH' 这种字符串。停牌日会返回 None，
+     所以每次访问必须判空：
+         b = bar[symbol]
+         if b is None or b.close is None or b.close == 0:
+             continue
+   - stock_api_quotation(symbol_list=[...], start_date='YYYYMMDD', end_date='YYYYMMDD',
+     fields=['close','volume'], period='1d')：取历史日线，返回 DataFrame
+     (列: symbol, date(YYYYMMDD字符串), 及 fields)。end_date 只能用 str(context.trade_date)，
+     严禁任何未来日期。返回可能为空 DataFrame，用前必须判 empty。
+   - order_shares('8888', symbol, 股数, style=MarketOrderStyle)：正数买入、负数卖出，
+     股数用 100 的整数倍。账户固定 '8888'。
+   - context.trade_date：当前回测日(YYYYMMDD)。算星期几：
+     datetime.datetime.strptime(str(context.trade_date), '%Y%m%d').weekday()（需 import datetime）。
+   - acc = context.stock_account_dict['8888']：acc.cash 可用资金 / acc.total_value 总资产 /
+     acc.market_value 持仓市值 / acc.positions 持仓字典。
+     遍历持仓：for sym, pos in acc.positions.items()，pos.quantity 数量 / pos.sellable 可卖数量
+     / pos.avg_price 成本价 / pos.market_value 市值 / pos.pnl 盈亏。
+3. 下列名字都【不存在】，出现即错误：stock_api_daily、get_history、history_bars、get_price、
+   attribute_history、get_bars、order_target、order_percent、context.run_info。
+4. handle_data 里对每只股票的处理必须整体包在 try/except Exception: continue 里，
+   单只股票异常不得影响其他股票。
+5. 均线/动量等指标：每天用 stock_api_quotation 拉到 str(context.trade_date) 为止的窗口自己算，
+   或在 context 上维护自己的缓存列表；不存在任何内置指标函数。
+6. 禁止 print(用 SRLogger.info)、禁止模块级全局变量、禁止 os/sys/subprocess/eval/exec/open。
+"""
+
+
 def system_prompt() -> str:
-    """优先复用平台的「回测引擎文档 + 代码规范」，保证生成代码符合它的引擎接口。"""
+    """优先复用平台的「回测引擎文档 + 代码规范」，再叠加硬性 API 白名单。"""
     try:
         from panda_server.services.llm.agents.prompts_provider import PromptsProvider as pp
-        return pp.join(
+        base = pp.join(
             pp.role_and_context_backtest_assistant,
             pp.backtest_code_requirements,
             pp.get_backtest_engine_doc(),
         )
     except Exception:
-        return (
+        base = (
             "你是 panda_quantflow 的 A股策略工程师。只输出一个可回测的策略：定义 "
             "initialize(context) / before_trading(context) / handle_data(context, bar_dict) / "
-            "after_trading(context) 四个函数。下单用 order_shares('8888', symbol, amount, style=MarketOrderStyle)"
-            "（账户固定字符串 '8888'，必须带 style=MarketOrderStyle）。context 只能用 now/portfolio_dict/"
-            "stock_account_dict/future_account_dict/df_factor 及自定义属性，禁止 context.run_info。"
-            "只交易用户给的自选股，遵守 A股 T+1，不要 os/sys/subprocess/eval/exec/open/print。"
+            "after_trading(context) 四个函数。只交易用户给的自选股，遵守 A股 T+1。"
         )
+    return base + "\n" + HARD_RULES
 
 
 def user_prompt(desc: str, watch: list, metrics: dict, prev_code: str = "") -> str:
