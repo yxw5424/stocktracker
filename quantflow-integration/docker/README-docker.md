@@ -68,6 +68,10 @@ docker compose run --rm loader
 
 > 想更新到最新行情,随时再跑一次 `docker compose run --rm loader`(按 symbol+date 幂等 upsert,不会重复)。
 
+**⚠️ 灌完数据必须重启平台**:`docker compose restart quantflow`。平台会把"查过但不存在"的
+股票/指数信息缓存在进程里,不重启的话,即使数据已经灌进库,正在运行的平台仍按"不存在"处理
+(症状:基准指数报 `'NoneType' object has no attribute 'last'`)。
+
 ## ⚠️ 老实说三点
 
 1. **首次 `--build` 大且慢**:会拉 `torch + tensorflow` 等,镜像好几个 G、可能十几二十分钟。这是平台依赖决定的,不是我加的。

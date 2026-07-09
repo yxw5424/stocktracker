@@ -47,6 +47,7 @@ def run_strategy_loop(*, description, watch, max_rounds, target_metric, target_v
     """
     history, best = [], None
     prev_code, prev_metrics = "", {}
+    last_valid_code, last_valid_round = "", 0   # 最后一版通过静态校验的代码(兜底用)
 
     for rnd in range(1, int(max_rounds) + 1):
         if log:
@@ -69,6 +70,8 @@ def run_strategy_loop(*, description, watch, max_rounds, target_metric, target_v
             if log:
                 log(f"[自迭代] 第 {rnd} 轮代码检查未过，回喂修复")
             continue
+
+        last_valid_code, last_valid_round = code, rnd
 
         # 回测
         try:
@@ -98,6 +101,15 @@ def run_strategy_loop(*, description, watch, max_rounds, target_metric, target_v
             if log:
                 log(f"[自迭代] 第 {rnd} 轮达到目标 {target_metric}={score} ≥ {tgt}，提前结束")
             break
+
+    # 兜底：所有轮次都没取得目标指标(如回测环境异常)时，输出最后一版通过
+    # 校验的代码，绝不输出空代码（空代码连到回测节点会报"缺少必要方法：initialize"）。
+    if best is None and last_valid_code:
+        if log:
+            log(f"[自迭代] 各轮均未取得 {target_metric} 指标(多为回测环境/数据问题)，"
+                f"best_code 采用第 {last_valid_round} 轮通过校验的代码兜底")
+        best = {"code": last_valid_code, "metrics": {}, "round": last_valid_round,
+                "explanation": "各轮回测未产出指标，此为最后一版通过校验的代码(兜底)"}
 
     return {
         "best_code": (best or {}).get("code", ""),
