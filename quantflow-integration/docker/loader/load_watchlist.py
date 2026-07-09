@@ -135,7 +135,10 @@ def _fetch_stock_daily(sym, start, end):
                                  end_date=end, adjust="qfq")
         if df is None or df.empty:
             return df
-        df = df.rename(columns={"amount": "turnover"})       # 新浪列名已是英文,volume 单位:股
+        # 新浪列名已是英文,volume 单位:股。注意它自带 turnover 列(是换手率!),
+        # 先删掉再把 amount(成交额)改名成 turnover,否则两列同名取值变 Series。
+        df = df.drop(columns=["turnover", "outstanding_share"], errors="ignore")
+        df = df.rename(columns={"amount": "turnover"})
         return df
 
     try:
