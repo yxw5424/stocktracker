@@ -1,0 +1,575 @@
+{
+  "format_version": "1.0",
+  "name": "AI策略-回测-画图(一键流)",
+  "description": "①AI顾问按描述出策略→股票回测→策略回测结果画图；②AI自迭代多轮改进→复跑最优代码→画图。运行前确认已灌行情数据,provider=deepseek。",
+  "litegraph": {
+    "last_node_id": 6,
+    "last_link_id": 4,
+    "nodes": [
+      {
+        "id": 1,
+        "type": "AIAdvisorNode",
+        "title": "AI策略顾问",
+        "pos": [
+          60,
+          80
+        ],
+        "size": [
+          400,
+          240
+        ],
+        "flags": {
+          "uuid": "83f8c40d-8b6d-4bc0-9ae4-5324037397ba"
+        },
+        "order": 1,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "策略需求描述",
+            "type": 0,
+            "link": null,
+            "fieldName": "description",
+            "hide": false
+          },
+          {
+            "name": "自选股清单",
+            "type": 0,
+            "link": null,
+            "fieldName": "watchlist",
+            "hide": false
+          },
+          {
+            "name": "回测ID",
+            "type": 0,
+            "link": null,
+            "fieldName": "back_id",
+            "hide": false
+          },
+          {
+            "name": "LLM 提供方",
+            "type": 0,
+            "link": null,
+            "fieldName": "provider",
+            "hide": true
+          }
+        ],
+        "outputs": [
+          {
+            "name": "回测/需求分析",
+            "type": 0,
+            "links": [],
+            "fieldName": "analysis",
+            "slot_index": 0
+          },
+          {
+            "name": "生成的策略代码",
+            "type": 0,
+            "links": [
+              1
+            ],
+            "fieldName": "strategy_code",
+            "slot_index": 1
+          },
+          {
+            "name": "策略说明",
+            "type": 0,
+            "links": [],
+            "fieldName": "explanation",
+            "slot_index": 2
+          },
+          {
+            "name": "实际使用的模型",
+            "type": 0,
+            "links": [],
+            "fieldName": "engine",
+            "slot_index": 3
+          }
+        ],
+        "properties": {
+          "策略需求描述": "只交易我给的自选股：20日均线上穿60日均线买入，跌破20日均线卖出，等权分配资金，单票仓位不超过30%。",
+          "自选股清单": "600519.SH,000001.SZ,600036.SH,300750.SZ,000858.SZ",
+          "回测ID": "",
+          "LLM 提供方": "deepseek"
+        }
+      },
+      {
+        "id": 2,
+        "type": "StockBacktestControl",
+        "title": "股票回测",
+        "pos": [
+          560,
+          80
+        ],
+        "size": [
+          400,
+          330
+        ],
+        "flags": {
+          "uuid": "d0f80162-e9f0-478c-82ab-dfdfa2b96323"
+        },
+        "order": 2,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "策略代码",
+            "type": 0,
+            "link": 1,
+            "fieldName": "code",
+            "hide": false
+          },
+          {
+            "name": "因子值",
+            "type": 0,
+            "link": null,
+            "fieldName": "factors",
+            "hide": false
+          },
+          {
+            "name": "初始资金",
+            "type": 0,
+            "link": null,
+            "fieldName": "start_capital",
+            "hide": true
+          },
+          {
+            "name": "基准指数",
+            "type": 0,
+            "link": null,
+            "fieldName": "standard_symbol",
+            "hide": false
+          },
+          {
+            "name": "佣金率",
+            "type": 0,
+            "link": null,
+            "fieldName": "commission_rate",
+            "hide": true
+          },
+          {
+            "name": "回测频率",
+            "type": 0,
+            "link": null,
+            "fieldName": "frequency",
+            "hide": true
+          },
+          {
+            "name": "回测开始时间",
+            "type": 0,
+            "link": null,
+            "fieldName": "start_date",
+            "hide": true
+          },
+          {
+            "name": "回测结束时间",
+            "type": 0,
+            "link": null,
+            "fieldName": "end_date",
+            "hide": true
+          }
+        ],
+        "outputs": [
+          {
+            "name": "回测id",
+            "type": 0,
+            "links": [
+              2
+            ],
+            "fieldName": "backtest_id",
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "策略代码": "",
+          "初始资金": 10000000,
+          "基准指数": "上证指数",
+          "佣金率": 1,
+          "回测频率": "1d",
+          "回测开始时间": "20240102",
+          "回测结束时间": "20250630"
+        }
+      },
+      {
+        "id": 3,
+        "type": "BackTestResultControl",
+        "title": "策略回测结果(点开看图)",
+        "pos": [
+          1060,
+          80
+        ],
+        "size": [
+          320,
+          140
+        ],
+        "flags": {
+          "uuid": "e6ed39f0-bd0e-4c7e-b737-382f2477b389"
+        },
+        "order": 3,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "回测任务",
+            "type": 0,
+            "link": 2,
+            "fieldName": "task_id",
+            "hide": false
+          }
+        ],
+        "outputs": [
+          {
+            "name": "图表绘制",
+            "type": 0,
+            "links": [],
+            "fieldName": "task_id",
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "回测任务": "error"
+        }
+      },
+      {
+        "id": 4,
+        "type": "AIStrategyLoopNode",
+        "title": "AI策略自迭代",
+        "pos": [
+          60,
+          620
+        ],
+        "size": [
+          420,
+          430
+        ],
+        "flags": {
+          "uuid": "88c0d94f-eadc-45b4-b592-78cfc556fcf3"
+        },
+        "order": 4,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "策略需求描述",
+            "type": 0,
+            "link": null,
+            "fieldName": "description",
+            "hide": false
+          },
+          {
+            "name": "自选股清单",
+            "type": 0,
+            "link": null,
+            "fieldName": "watchlist",
+            "hide": false
+          },
+          {
+            "name": "最大迭代轮数",
+            "type": 0,
+            "link": null,
+            "fieldName": "max_rounds",
+            "hide": true
+          },
+          {
+            "name": "目标指标",
+            "type": 0,
+            "link": null,
+            "fieldName": "target_metric",
+            "hide": true
+          },
+          {
+            "name": "目标值(0=不设，跑满轮数)",
+            "type": 0,
+            "link": null,
+            "fieldName": "target_value",
+            "hide": true
+          },
+          {
+            "name": "LLM 提供方",
+            "type": 0,
+            "link": null,
+            "fieldName": "provider",
+            "hide": true
+          },
+          {
+            "name": "回测开始",
+            "type": 0,
+            "link": null,
+            "fieldName": "start_date",
+            "hide": true
+          },
+          {
+            "name": "回测结束",
+            "type": 0,
+            "link": null,
+            "fieldName": "end_date",
+            "hide": true
+          },
+          {
+            "name": "初始资金",
+            "type": 0,
+            "link": null,
+            "fieldName": "start_capital",
+            "hide": true
+          },
+          {
+            "name": "基准指数",
+            "type": 0,
+            "link": null,
+            "fieldName": "standard_symbol",
+            "hide": false
+          },
+          {
+            "name": "佣金率",
+            "type": 0,
+            "link": null,
+            "fieldName": "commission_rate",
+            "hide": true
+          }
+        ],
+        "outputs": [
+          {
+            "name": "最优策略代码",
+            "type": 0,
+            "links": [
+              3
+            ],
+            "fieldName": "best_code",
+            "slot_index": 0
+          },
+          {
+            "name": "最优出现在第几轮",
+            "type": 0,
+            "links": [],
+            "fieldName": "best_round",
+            "slot_index": 1
+          },
+          {
+            "name": "最优绩效(JSON)",
+            "type": 0,
+            "links": [],
+            "fieldName": "best_metrics",
+            "slot_index": 2
+          },
+          {
+            "name": "各轮历史(JSON)",
+            "type": 0,
+            "links": [],
+            "fieldName": "rounds",
+            "slot_index": 3
+          },
+          {
+            "name": "小结",
+            "type": 0,
+            "links": [],
+            "fieldName": "summary",
+            "slot_index": 4
+          }
+        ],
+        "properties": {
+          "策略需求描述": "只交易我给的自选股：20日均线上穿60日均线买入，跌破20日均线卖出，等权分配资金，单票仓位不超过30%。",
+          "自选股清单": "600519.SH,000001.SZ,600036.SH,300750.SZ,000858.SZ",
+          "最大迭代轮数": 3,
+          "目标指标": "sharpe",
+          "目标值(0=不设，跑满轮数)": 0.0,
+          "LLM 提供方": "deepseek",
+          "回测开始": "20240102",
+          "回测结束": "20250630",
+          "初始资金": 10000000,
+          "基准指数": "上证指数",
+          "佣金率": 1
+        }
+      },
+      {
+        "id": 5,
+        "type": "StockBacktestControl",
+        "title": "股票回测",
+        "pos": [
+          560,
+          620
+        ],
+        "size": [
+          400,
+          330
+        ],
+        "flags": {
+          "uuid": "76caa46b-5917-4fe1-bf88-cda605dc34c0"
+        },
+        "order": 5,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "策略代码",
+            "type": 0,
+            "link": 3,
+            "fieldName": "code",
+            "hide": false
+          },
+          {
+            "name": "因子值",
+            "type": 0,
+            "link": null,
+            "fieldName": "factors",
+            "hide": false
+          },
+          {
+            "name": "初始资金",
+            "type": 0,
+            "link": null,
+            "fieldName": "start_capital",
+            "hide": true
+          },
+          {
+            "name": "基准指数",
+            "type": 0,
+            "link": null,
+            "fieldName": "standard_symbol",
+            "hide": false
+          },
+          {
+            "name": "佣金率",
+            "type": 0,
+            "link": null,
+            "fieldName": "commission_rate",
+            "hide": true
+          },
+          {
+            "name": "回测频率",
+            "type": 0,
+            "link": null,
+            "fieldName": "frequency",
+            "hide": true
+          },
+          {
+            "name": "回测开始时间",
+            "type": 0,
+            "link": null,
+            "fieldName": "start_date",
+            "hide": true
+          },
+          {
+            "name": "回测结束时间",
+            "type": 0,
+            "link": null,
+            "fieldName": "end_date",
+            "hide": true
+          }
+        ],
+        "outputs": [
+          {
+            "name": "回测id",
+            "type": 0,
+            "links": [
+              4
+            ],
+            "fieldName": "backtest_id",
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "策略代码": "",
+          "初始资金": 10000000,
+          "基准指数": "上证指数",
+          "佣金率": 1,
+          "回测频率": "1d",
+          "回测开始时间": "20240102",
+          "回测结束时间": "20250630"
+        }
+      },
+      {
+        "id": 6,
+        "type": "BackTestResultControl",
+        "title": "策略回测结果(点开看图)",
+        "pos": [
+          1060,
+          620
+        ],
+        "size": [
+          320,
+          140
+        ],
+        "flags": {
+          "uuid": "1889397b-9e64-40fe-9583-a3ba2847ef54"
+        },
+        "order": 6,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "回测任务",
+            "type": 0,
+            "link": 4,
+            "fieldName": "task_id",
+            "hide": false
+          }
+        ],
+        "outputs": [
+          {
+            "name": "图表绘制",
+            "type": 0,
+            "links": [],
+            "fieldName": "task_id",
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "回测任务": "error"
+        }
+      }
+    ],
+    "links": [
+      [
+        1,
+        1,
+        1,
+        2,
+        0,
+        0
+      ],
+      [
+        2,
+        2,
+        0,
+        3,
+        0,
+        0
+      ],
+      [
+        3,
+        4,
+        0,
+        5,
+        0,
+        0
+      ],
+      [
+        4,
+        5,
+        0,
+        6,
+        0,
+        0
+      ]
+    ],
+    "groups": [
+      {
+        "title": "① AI顾问出策略 → 回测 → 画图",
+        "bounding": [
+          30,
+          20,
+          1400,
+          480
+        ],
+        "color": "#3f789e"
+      },
+      {
+        "title": "② AI自迭代(全自动多轮) → 复跑最优 → 画图",
+        "bounding": [
+          30,
+          560,
+          1400,
+          560
+        ],
+        "color": "#5f8f5f"
+      }
+    ],
+    "config": {},
+    "extra": {},
+    "version": 0.4
+  }
+}
