@@ -26,7 +26,7 @@ RUN pip install -e ./panda_quantflow
 RUN pip install anthropic
 
 # 3) 放入 AI 节点 + 安全启动器 + 内置聊天换 Claude 补丁（context = quantflow-integration/）
-COPY ai_advisor_node.py ai_strategy_loop_node.py /app/panda_quantflow/src/panda_plugins/custom/
+COPY ai_advisor_node.py ai_strategy_loop_node.py backtest_summary_node.py /app/panda_quantflow/src/panda_plugins/custom/
 COPY run_local_secure.py /app/panda_quantflow/src/
 COPY patched/llm-claude.patch /tmp/llm-claude.patch
 RUN cd panda_quantflow && git apply /tmp/llm-claude.patch
