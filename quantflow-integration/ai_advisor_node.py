@@ -65,35 +65,93 @@ def read_backtest(back_id: str, log=None) -> dict:
 # 硬性 API 白名单 —— 逐条对照过引擎源码(bar_map/stock_api/stock_account 等)。
 # 目的：堵死 LLM 发明不存在函数(如 stock_api_daily)与不防停牌两类高频错误。
 HARD_RULES = """
-【硬性约束 —— 违反任何一条代码必然报错，逐条自查后再输出】
+【硬性约束 —— 违反任何一条要么报错、要么静默 0 成交，逐条自查后再输出】
 1. 头两行必须原样出现：
    from panda_backtest.api.api import *
    from panda_backtest.api.stock_api import *
-2. 你能用的全部数据/交易接口只有下面这些，签名必须一字不差：
-   - bar[symbol]：当前bar。symbol 必须是 '600519.SH' 这种字符串。停牌日会返回 None，
-     所以每次访问必须判空：
-         b = bar[symbol]
-         if b is None or b.close is None or b.close == 0:
-             continue
-   - stock_api_quotation(symbol_list=[...], start_date='YYYYMMDD', end_date='YYYYMMDD',
-     fields=['close','volume'], period='1d')：取历史日线，返回 DataFrame
-     (列: symbol, date(YYYYMMDD字符串), 及 fields)。end_date 只能用 str(context.trade_date)，
-     严禁任何未来日期。返回可能为空 DataFrame，用前必须判 empty。
-   - order_shares('8888', symbol, 股数, style=MarketOrderStyle)：正数买入、负数卖出，
-     股数用 100 的整数倍。账户固定 '8888'。
-   - context.trade_date：当前回测日(YYYYMMDD)。算星期几：
-     datetime.datetime.strptime(str(context.trade_date), '%Y%m%d').weekday()（需 import datetime）。
+
+2. 【关键】历史数据一律在 context 里自建缓存，禁止用 stock_api_quotation 取历史。
+   原因：该接口 period 必须精确等于 '1d'、fields 不含 'symbol' 时返回表没有 symbol 列、
+   空结果是空表——任何一个没处理好都会被下面的 try/except 吞掉，导致「一笔不交易、收益0%」。
+   正确做法：在 handle_data 里每天把 bar[s].close 追加进 context.hist[s] 列表，从列表算均线/动量。
+
+3. 你能用的接口只有这些，签名一字不差：
+   - bar[symbol]：当前bar，symbol 形如 '562500.SH'。停牌返回 None，必须判空：
+         b = bar[s]
+         if b is None or getattr(b,'close',None) in (None,0): continue
+     可用字段：b.open/b.high/b.low/b.close/b.volume。
+   - order_shares('8888', symbol, 股数, style=MarketOrderStyle)：正数买、负数卖，股数为100整数倍。
+   - context.trade_date：当前回测日(int或str,如20240102)。星期几：
+     import datetime; datetime.datetime.strptime(str(context.trade_date),'%Y%m%d').weekday()  # 4=周五
    - acc = context.stock_account_dict['8888']：acc.cash 可用资金 / acc.total_value 总资产 /
-     acc.market_value 持仓市值 / acc.positions 持仓字典。
-     遍历持仓：for sym, pos in acc.positions.items()，pos.quantity 数量 / pos.sellable 可卖数量
-     / pos.avg_price 成本价 / pos.market_value 市值 / pos.pnl 盈亏。
-3. 下列名字都【不存在】，出现即错误：stock_api_daily、get_history、history_bars、get_price、
-   attribute_history、get_bars、order_target、order_percent、context.run_info。
-4. handle_data 里对每只股票的处理必须整体包在 try/except Exception: continue 里，
-   单只股票异常不得影响其他股票。
-5. 均线/动量等指标：每天用 stock_api_quotation 拉到 str(context.trade_date) 为止的窗口自己算，
-   或在 context 上维护自己的缓存列表；不存在任何内置指标函数。
-6. 禁止 print(用 SRLogger.info)、禁止模块级全局变量、禁止 os/sys/subprocess/eval/exec/open。
+     acc.positions 持仓字典。遍历：for sym,pos in acc.positions.items():，pos.sellable 可卖数量。
+   - SRLogger.info('...') 打日志（禁止 print）。
+
+4. 【必须】每次触发买/卖后 SRLogger.info 记一行(含日期/标的/动作/价格)；
+   若某天想买但被资金/涨停/仓位挡住，也要 SRLogger.info 说明原因。
+   这样"0成交"时你能从日志看到到底卡在哪，而不是一片空白。
+
+5. 单只股票的处理用 try/except，但 except 里必须 SRLogger.info 记下异常，禁止裸 continue 吞错。
+
+6. 下列名字都不存在，出现即错：stock_api_daily/get_history/history_bars/get_price/
+   attribute_history/order_target/order_percent/context.run_info。
+   禁止模块级全局变量、禁止 os/sys/subprocess/eval/exec/open。
+
+7. 必须照抄下面这个【可运行参考骨架】的数据缓存与下单结构，再改信号逻辑：
+```python
+from panda_backtest.api.api import *
+from panda_backtest.api.stock_api import *
+import datetime
+
+def initialize(context):
+    context.universe = ['562500.SH','512760.SH']   # 用户自选，逗号分隔填进来
+    context.hist = {s: [] for s in context.universe}
+    context.hold = set()
+
+def handle_data(context, bar):
+    acc = context.stock_account_dict['8888']
+    prices = {}
+    for s in context.universe:
+        try:
+            b = bar[s]
+            if b is None or getattr(b,'close',None) in (None,0):
+                continue
+            prices[s] = b.close
+            context.hist[s].append(b.close)
+            if len(context.hist[s]) > 250:
+                context.hist[s] = context.hist[s][-250:]
+        except Exception as e:
+            SRLogger.info('数据异常 %s: %s' % (s, e)); continue
+
+    for s in list(context.hold):                       # 先处理卖出
+        h = context.hist.get(s, [])
+        if s in prices and len(h) >= 20:
+            ma20 = sum(h[-20:]) / 20
+            if prices[s] < ma20:                       # 跌破20日线卖出
+                pos = acc.positions.get(s)
+                if pos and pos.sellable > 0:
+                    order_shares('8888', s, -pos.sellable, style=MarketOrderStyle)
+                    context.hold.discard(s)
+                    SRLogger.info('卖出 %s @ %.3f' % (s, prices[s]))
+
+    for s in context.universe:                         # 再处理买入
+        if s in context.hold or s not in prices:
+            continue
+        h = context.hist.get(s, [])
+        if len(h) < 60:
+            continue
+        ma20, ma60 = sum(h[-20:])/20, sum(h[-60:])/60
+        if ma20 > ma60 and len(context.hold) < 4:      # 金叉且持仓未满
+            budget = acc.total_value * 0.24
+            qty = int(budget / prices[s] / 100) * 100
+            if qty >= 100 and acc.cash >= qty * prices[s]:
+                order_shares('8888', s, qty, style=MarketOrderStyle)
+                context.hold.add(s)
+                SRLogger.info('买入 %s %d股 @ %.3f' % (s, qty, prices[s]))
+            else:
+                SRLogger.info('想买 %s 但资金不足或不足100股' % s)
+```
+这个骨架能真实成交。你的任务是把里面的信号逻辑换成用户要的策略，数据缓存/下单/日志结构保持不变。
 """
 
 
