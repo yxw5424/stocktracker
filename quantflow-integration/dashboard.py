@@ -25,11 +25,12 @@ def _mongo():
 
 
 def _broker():
-    """从 custom 目录导入自研华泰客户端(只读调用)。"""
+    """从可能的位置导入自研华泰客户端(只读调用)。"""
     import sys
-    for p in ("/app/panda_quantflow/src/panda_plugins/custom",
-              os.path.dirname(__file__)):
-        if p not in sys.path:
+    for p in ("/app/panda_quantflow/src",
+              "/app/panda_quantflow/src/panda_plugins/custom",
+              os.path.dirname(os.path.abspath(__file__))):
+        if p and p not in sys.path:
             sys.path.insert(0, p)
     from htsc_broker import HTSCBroker
     return HTSCBroker()
