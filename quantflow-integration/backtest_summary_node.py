@@ -42,7 +42,7 @@ def _fmt(v):
 
 
 def build_summary(back_ids, labels, reader=read_backtest, log=None):
-    """纯逻辑,可单测:back_ids/labels 等长列表 → (markdown, json_str)。"""
+    """纯逻辑,可单测:back_ids/labels 等长列表 → (markdown, json_str, rows)。"""
     rows = []
     for i, bid in enumerate(back_ids):
         if not (bid or "").strip():
@@ -53,7 +53,7 @@ def build_summary(back_ids, labels, reader=read_backtest, log=None):
         rows.append(m)
 
     if not rows:
-        return "(没有可汇总的回测ID —— 请把各回测节点的「回测id」连到本节点)", "[]"
+        return "(没有可汇总的回测ID —— 请把各回测节点的「回测id」连到本节点)", "[]", []
 
     head = "| 策略 | " + " | ".join(n for _, n in _COLS) + " |"
     sep = "|" + "---|" * (len(_COLS) + 1)
@@ -64,7 +64,60 @@ def build_summary(back_ids, labels, reader=read_backtest, log=None):
     md = "\n".join(lines)
     js = json.dumps([{k: m.get(k) for k, _ in _COLS} | {"label": m["_label"], "back_id": m["_back_id"]}
                      for m in rows], ensure_ascii=False, default=str)
-    return md, js
+    return md, js, rows
+
+
+# 平台把收益/回撤/波动率存成小数(0.594=59.4%);万一某些部署已是百分数,>5 就视为百分数。
+_PCT_KEYS = {"back_profit", "back_profit_year", "max_drawdown", "volatility"}
+
+
+def _fmt_html(key, v):
+    if v is None or v == "":
+        return "-"
+    if key in _PCT_KEYS and isinstance(v, (int, float)):
+        pct = v * 100 if abs(v) <= 5 else v
+        return f"{pct:.2f}%"
+    if isinstance(v, float):
+        return f"{v:.3f}"
+    return str(v)
+
+
+def build_html(rows, title="回测汇总表"):
+    """自包含 HTML 报告:百分比格式化 + 夏普最高行高亮 + 回撤红色。"""
+    best_sharpe = None
+    vals = [r.get("sharpe") for r in rows if isinstance(r.get("sharpe"), (int, float))]
+    if vals:
+        best_sharpe = max(vals)
+    head = "".join(f"<th>{n}</th>" for _, n in _COLS)
+    body = []
+    for r in rows:
+        is_best = best_sharpe is not None and r.get("sharpe") == best_sharpe
+        tds = []
+        for k, _ in _COLS:
+            cell = _fmt_html(k, r.get(k))
+            cls = ' class="dd"' if k == "max_drawdown" else ""
+            tds.append(f"<td{cls}>{cell}</td>")
+        body.append(f"<tr{' class=best' if is_best else ''}><td class=lbl>{r['_label']}"
+                    f"{' 🏆' if is_best else ''}</td>{''.join(tds)}</tr>")
+    return f"""<!doctype html><html lang=zh><head><meta charset=utf-8>
+<title>{title}</title><style>
+body{{font-family:system-ui,'Microsoft YaHei',sans-serif;background:#0f1420;color:#dde3ee;
+     display:flex;flex-direction:column;align-items:center;padding:40px 16px}}
+h1{{font-size:20px;font-weight:600}}
+p.hint{{color:#8892a6;font-size:13px}}
+table{{border-collapse:collapse;margin-top:16px;font-size:14px}}
+th,td{{padding:9px 14px;border-bottom:1px solid #232b3d;text-align:right;white-space:nowrap}}
+th{{color:#8fa0bd;font-weight:600;border-bottom:2px solid #33405c}}
+td.lbl{{text-align:left;font-weight:600}}
+td.dd{{color:#ff7b72}}
+tr.best{{background:#12281c}}
+tr.best td{{color:#7ee2a8}}
+tr:hover{{background:#161e30}}
+</style></head><body>
+<h1>{title}</h1>
+<p class=hint>🏆 = 夏普最高;回撤/收益已按百分比显示;判稳定看「夏普 + 最大回撤」,别只看收益。</p>
+<table><tr><th style="text-align:left">策略</th>{head}</tr>
+{''.join(body)}</table></body></html>"""
 
 
 @ui(
@@ -106,11 +159,25 @@ class BacktestSummaryNode(BaseWorkNode):
         back_ids = [input.back_id_1, input.back_id_2, input.back_id_3,
                     input.back_id_4, input.back_id_5, input.back_id_6]
         labels = [x.strip() for x in (input.labels or "").replace("，", ",").split(",")]
-        md, js = build_summary(back_ids, labels, log=self.log_error)
+        md, js, rows = build_summary(back_ids, labels, log=self.log_error)
         self.log_info("===== 回测汇总表(可直接复制) =====")
         for line in md.splitlines():
             self.log_info(line)
         self.log_info("===== 表结束 =====")
+
+        # 可视化:写自包含 HTML 到挂载目录(宿主机 docker/reports/),浏览器直接开
+        if rows:
+            try:
+                import os as _os
+                import time as _time
+                rep_dir = _os.getenv("REPORT_DIR", "/reports")
+                _os.makedirs(rep_dir, exist_ok=True)
+                fname = f"summary_{_time.strftime('%Y%m%d_%H%M%S')}.html"
+                with open(_os.path.join(rep_dir, fname), "w", encoding="utf-8") as f:
+                    f.write(build_html(rows))
+                self.log_info(f"📊 可视化报表已生成:docker\\reports\\{fname}(双击用浏览器打开)")
+            except Exception as exc:
+                self.log_error(f"HTML 报表生成失败(不影响汇总结果):{exc}")
         return SummaryOutput(summary_md=md, summary_json=js)
 
 

@@ -56,6 +56,8 @@ services:
       NO_PROXY: "mongo,localhost,127.0.0.1,api.deepseek.com"   # 容器内网/国内可直连的不走代理
     ports:
       - "127.0.0.1:8000:8000"    # 只绑本机，外部访问不到
+    volumes:
+      - "./reports:/reports"     # 回测汇总表等 HTML 报告落到宿主机 docker/reports/
     restart: unless-stopped
 
   # 数据导入器：把 watchlist.txt 里的自选股行情用 akshare 灌进 Mongo。
