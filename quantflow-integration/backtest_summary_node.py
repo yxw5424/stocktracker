@@ -67,7 +67,7 @@ def build_summary(back_ids, labels, reader=read_backtest, log=None):
     return md, js, rows
 
 
-# 平台把收益/回撤/波动率存成小数(0.594=59.4%);万一某些部署已是百分数,>5 就视为百分数。
+# 平台把收益/回撤/波动率一律存成小数(0.594=59.4%, 5.10=510%),显示时统一×100。
 _PCT_KEYS = {"back_profit", "back_profit_year", "max_drawdown", "volatility"}
 
 
@@ -75,8 +75,7 @@ def _fmt_html(key, v):
     if v is None or v == "":
         return "-"
     if key in _PCT_KEYS and isinstance(v, (int, float)):
-        pct = v * 100 if abs(v) <= 5 else v
-        return f"{pct:.2f}%"
+        return f"{v * 100:.2f}%"   # 平台绩效字段一律是小数,统一×100(不再用脆弱的阈值判断)
     if isinstance(v, float):
         return f"{v:.3f}"
     return str(v)
@@ -175,7 +174,7 @@ def _svg_chart(series_map, width=980, height=380):
 def _bars(rows):
     """夏普/回撤对比条形图(纯CSS)。"""
     def pct(v):
-        return v * 100 if isinstance(v, (int, float)) and abs(v) <= 5 else (v or 0)
+        return (v or 0) * 100
     sh = [(r["_label"], r.get("sharpe") or 0) for r in rows]
     dd = [(r["_label"], abs(pct(r.get("max_drawdown") or 0))) for r in rows]
     out = []
@@ -307,10 +306,8 @@ class BacktestSummaryNode(BaseWorkNode):
                     if not pts:
                         continue
                     # 统一为百分数(平台存小数时 ×100)
-                    mx = max(abs(v) for _, v, _ in pts) or 1
-                    k = 100.0 if mx <= 20 else 1.0
-                    series_map[r["_label"]] = [(d, v * k) for d, v, _ in pts]
-                    bm = [(d, b * k) for d, v, b in pts if b is not None]
+                    series_map[r["_label"]] = [(d, v * 100) for d, v, _ in pts]
+                    bm = [(d, b * 100) for d, v, b in pts if b is not None]
                     if bm and (bench is None or len(bm) > len(bench)):
                         bench = bm
                 if bench:
