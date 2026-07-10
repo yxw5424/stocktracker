@@ -513,6 +513,125 @@ def recent_lessons(db, n=5):
 
 
 # --------------------------------------------------------------------------- #
+# ⑤ 对账:实际成交 vs 决策价(回测/信号价与真实执行的差距,就在这里量化)
+# --------------------------------------------------------------------------- #
+COL_RECON, COL_EQ = "ai_review_recon", "ai_review_equity"
+
+
+def _pick(d, *keys):
+    """在成交记录 dict 里按候选键名取值(华泰字段名没有文档,防御式取)。"""
+    for k in keys:
+        if k in d and d[k] not in (None, ""):
+            return d[k]
+    low = {str(k).lower(): v for k, v in d.items()}
+    for k in keys:
+        v = low.get(k.lower())
+        if v not in (None, ""):
+            return v
+    return None
+
+
+def _find_trade_lists(obj, out):
+    """递归找出响应里『像成交记录列表』的部分:元素是含价格+数量字段的 dict。"""
+    if isinstance(obj, list):
+        if obj and isinstance(obj[0], dict) and \
+                _pick(obj[0], "price", "tradePrice", "dealPrice", "filledPrice") is not None:
+            out.append(obj)
+        else:
+            for v in obj:
+                _find_trade_lists(v, out)
+    elif isinstance(obj, dict):
+        for v in obj.values():
+            _find_trade_lists(v, out)
+
+
+def reconcile(db, today):
+    """①快照账户总资产(ai_review_equity);②拉华泰近14天成交,与最近的同向决策
+    价对比算滑点(ai_review_recon,按成交ID去重);③返回报告行。全程只读。"""
+    lines = []
+    if _BROKER is None:
+        return lines
+
+    # ① 每日权益快照 —— 唯一无偏的成绩单,和回测预期曲线对着看
+    try:
+        total = _find_asset_number(_BROKER.account_balance())
+        if total:
+            db[COL_EQ].update_one({"date": today},
+                                  {"$set": {"date": today, "total_asset": total}}, upsert=True)
+            prev = db[COL_EQ].find_one({"date": {"$lt": today}}, sort=[("date", -1)])
+            chg = (f"(较上一快照 {(total / prev['total_asset'] - 1) * 100:+.2f}%)"
+                   if prev and prev.get("total_asset") else "")
+            lines.append(f"- 账户总资产快照:{total:,.0f} 元 {chg}")
+    except Exception as e:
+        lines.append(f"- ⚠️ 权益快照失败:{e}")
+
+    # ② 成交对账
+    try:
+        import datetime as _dt
+        start = (_dt.date.today() - _dt.timedelta(days=14)).strftime("%Y-%m-%d")
+        resp = _BROKER.trade_history(start=start)
+        found = []
+        _find_trade_lists(resp, found)
+        trades = [t for lst in found for t in lst]
+    except Exception as e:
+        lines.append(f"- ⚠️ 拉取成交记录失败:{e}")
+        trades = []
+
+    new_rows = []
+    for t in trades:
+        code = str(_pick(t, "stockCode", "code", "symbol") or "")
+        if not code:
+            continue
+        ex = str(_pick(t, "exchange", "market") or "")
+        sym = f"{code.split('.')[0]}.{ex}" if ex in ("SH", "SZ", "BJ") else _norm(code)
+        fill = _pick(t, "price", "tradePrice", "dealPrice", "filledPrice")
+        qty = _pick(t, "quantity", "tradeQuantity", "dealQuantity", "filledQuantity")
+        when = str(_pick(t, "tradeTime", "dealTime", "time", "createTime", "orderTime") or "")
+        direction = str(_pick(t, "direction", "side", "bsFlag") or "").lower()
+        is_buy = ("buy" in direction) or ("买" in direction)
+        tid = str(_pick(t, "tradeId", "dealId", "id", "orderId") or f"{sym}|{when}|{fill}|{qty}")
+        if fill is None or db[COL_RECON].find_one({"trade_id": tid}):
+            continue
+        fill = float(fill)
+        # 找这笔成交对应的决策:同标的、同方向、成交前最近的一条「执行/半仓」
+        side_pat = "买" if is_buy else "卖"
+        dec = db[COL_DEC].find_one(
+            {"symbol": sym, "side": {"$regex": side_pat},
+             "decision": {"$in": ["执行", "半仓"]}},
+            sort=[("date", -1)])
+        row = {"trade_id": tid, "date": today, "symbol": sym,
+               "side": "买入" if is_buy else "卖出", "fill_price": fill,
+               "qty": float(qty) if qty is not None else None, "trade_time": when}
+        if dec and dec.get("price"):
+            dp = float(dec["price"])
+            # 正数=比决策价吃亏(买贵了/卖便宜了),这就是回测(按决策价成交)与实盘的差
+            slip = ((fill - dp) / dp if is_buy else (dp - fill) / dp) * 100
+            row.update({"decision_date": dec["date"], "decision_price": dp,
+                        "slippage_pct": round(slip, 3)})
+        db[COL_RECON].insert_one(row)
+        new_rows.append(row)
+
+    for r in new_rows:
+        if r.get("decision_price"):
+            lines.append(f"- {r['side']} {r['symbol']}:决策价 {r['decision_price']} → "
+                         f"实际成交 {r['fill_price']},滑点 {r['slippage_pct']:+.2f}%"
+                         f"(正=吃亏)")
+        else:
+            lines.append(f"- {r['side']} {r['symbol']} 成交 @ {r['fill_price']}"
+                         f"(没找到对应决策,可能是手动单)")
+
+    # ③ 累计统计:滑点均值是把回测数字换算成实盘预期的折扣率
+    agg = list(db[COL_RECON].aggregate([
+        {"$match": {"slippage_pct": {"$ne": None}}},
+        {"$group": {"_id": "$side", "n": {"$sum": 1},
+                    "avg": {"$avg": "$slippage_pct"}}}]))
+    if agg:
+        stat = " · ".join(f"{a['_id']}{a['n']}笔 平均滑点{a['avg']:+.2f}%" for a in agg)
+        lines.append(f"- 累计:{stat}")
+    return lines
+
+
+# --------------------------------------------------------------------------- #
 # 主流程
 # --------------------------------------------------------------------------- #
 def main():
@@ -607,6 +726,10 @@ def main():
                 lines.append(ob)
         if extras:
             lines.append("")
+
+    recon = reconcile(db, today)
+    if recon:
+        lines += ["## 对账:实际成交 vs 决策价", *recon, ""]
 
     evals = evaluate_old_decisions(db, bars, today)
     if evals:
