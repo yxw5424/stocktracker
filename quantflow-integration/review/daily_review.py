@@ -34,6 +34,30 @@ BENCH = "000300.SH"     # 复核用基准:沪深300
 MAX_POS = 5             # 虚拟账本最多同时持有
 COL_POS, COL_DEC, COL_LES = "ai_review_positions", "ai_review_decisions", "ai_review_lessons"
 
+# 华泰模拟盘对接:配了 HT_APIKEY 就把每笔"执行/半仓"的决定同时发到华泰模拟盘(参赛)。
+# HTSC_LIVE=1 才真下单,否则干跑(报告里标 [干跑])。每股下单量:
+ORDER_LOTS = int(os.getenv("HTSC_ORDER_LOTS", "100"))   # 每笔下单股数(ETF 100 起、100 递增)
+try:
+    from htsc_broker import HTSCBroker, split_symbol
+    _BROKER = HTSCBroker() if os.getenv("HT_APIKEY") else None
+except Exception:
+    _BROKER = None
+
+
+def broker_order(side, symbol, price, log_lines):
+    """把决定映射成华泰模拟盘下单;side 含'买'→buy,含'卖'→sell。返回结果字符串。"""
+    if _BROKER is None:
+        return ""
+    code, ex = split_symbol(symbol)
+    direction = "buy" if "买" in side else "sell"
+    r = _BROKER.submit_order(direction, code, ex, ORDER_LOTS,
+                             order_type="limit", price=round(float(price), 3))
+    if r.get("dry_run"):
+        return f"  - 🧪 华泰[干跑] 将{('买入' if direction=='buy' else '卖出')} {code}.{ex} {ORDER_LOTS}股 @ {price}"
+    if r.get("ok") is False:
+        return f"  - ⚠️ 华泰下单失败:{r.get('error', {}).get('message', r)}"
+    return f"  - 📈 华泰[实盘模拟]已提交 {direction} {code}.{ex} {ORDER_LOTS}股:{json.dumps(r, ensure_ascii=False)[:200]}"
+
 
 # --------------------------------------------------------------------------- #
 # 基础设施
@@ -395,7 +419,12 @@ def main():
         lines += [f"### {icon} {sig['side']} {sig['symbol']} @ {sig['price']}",
                   f"- 触发规则:{sig['rule']}",
                   f"- 关键事实:{json.dumps(ctx, ensure_ascii=False)[:400]}",
-                  f"- **AI 决定:{d['decision']}**(信心 {d.get('confidence')}) —— {d.get('reason','')}", ""]
+                  f"- **AI 决定:{d['decision']}**(信心 {d.get('confidence')}) —— {d.get('reason','')}"]
+        if d["decision"] in ("执行", "半仓"):
+            ob = broker_order(sig["side"], sig["symbol"], sig["price"], lines)
+            if ob:
+                lines.append(ob)
+        lines.append("")
 
     # 全权模式:agent 主动操作(纸面)
     if FULL_AUTH:
@@ -419,6 +448,9 @@ def main():
             else:
                 db[COL_POS].delete_one({"symbol": sym})
             lines += [f"- 🤖 {a['action']} {sym} @ {price} —— {a.get('reason','')}"]
+            ob = broker_order(a["action"], sym, price, lines)
+            if ob:
+                lines.append(ob)
         if extras:
             lines.append("")
 

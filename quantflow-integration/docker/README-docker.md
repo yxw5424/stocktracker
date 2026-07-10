@@ -131,3 +131,43 @@ schtasks /create /tn "AI-Review" /sc weekly /d MON,TUE,WED,THU,FRI /st 15:30 ^
 
 ⚠️ 纯模拟:虚拟持仓、不接实盘。跑一两个月后对比「纯规则 vs AI复核后」的对错统计
 (报告里的复盘部分),用数据决定要不要信它。
+
+## 接入华泰 ETF 巅峰赛(把复核官的决定发到华泰模拟盘)
+
+复核官的决定除了记纸面账本,还能同时发到**华泰模拟盘**真参赛。不用官方 skill 包,
+我们直接对接它的 REST 接口(`ai.zhangle.com`),接进现有 reviewer。
+
+**⚠️ 先读:一旦真下第 1 笔,你就自动进「Agent 开发者榜」,不再参与个人排行榜 —— 不可逆。**
+所以默认 `HTSC_LIVE=0`(干跑,只在报告里打印"将要下的单");确认无误再开 `=1`。
+
+**① .env 里配(docker/.env):**
+```
+HT_APIKEY=ht_你的key
+WATCHLIST_FILE=/data/watchlist-etf.txt     # 比赛只认 ETF,用 ETF 名单(已附 watchlist-etf.txt)
+ASSET_TYPE=etf                             # loader 用 ETF 数据源
+HTSC_LIVE=0                                # 先干跑;要真参赛再改 1
+HTSC_ORDER_LOTS=100                        # 每笔下单股数
+```
+
+**② 灌 ETF 行情:**
+```bash
+docker compose run --rm loader
+```
+
+**③ 先干跑一次,看它想下什么单 + 验证华泰连通:**
+```bash
+docker compose run --rm reviewer
+```
+报告里会出现 `🧪 华泰[干跑] 将买入 510300.SH 100股 @ ...`。
+单独测华泰账户连通(只读,不下单):
+```bash
+docker compose run --rm reviewer python /app/htsc_broker.py
+```
+
+**④ 确认没问题、愿意正式参赛,再把 `.env` 改 `HTSC_LIVE=1`,重跑 reviewer** —— 这次会真提交,
+报告里变成 `📈 华泰[实盘模拟]已提交`。实时收益榜看官网:
+https://m.jiniutech.com/qs/htbr/hd/index.html?id=rhSWgiy9
+
+> 比赛信息(来自华泰安装文档):华泰柏瑞杯 ETF AI 交易巅峰赛;报名 2026/6/5–7/12,
+> 比赛 2026/6/11–7/20;标的为沪深 ETF;完成≥1 笔 Agent 交易即入 Agent 开发者榜。
+> `HT_APIKEY` 是能下单的凭证,当密码保管。

@@ -4,4 +4,5 @@ ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1 TZ=Asi
 RUN pip install "pymongo>=4" pandas akshare openai anthropic
 WORKDIR /app
 COPY review/daily_review.py /app/daily_review.py
+COPY review/htsc_broker.py /app/htsc_broker.py
 CMD ["python", "/app/daily_review.py"]

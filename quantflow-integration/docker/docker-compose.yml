@@ -78,6 +78,8 @@ services:
       END_DATE: "${END_DATE:-}"          # 留空=今天
       LOAD_MINUTE: "${LOAD_MINUTE:-0}"   # 设 1 额外拉分时线(慢、量大)
       WATCHLIST: "${WATCHLIST:-}"        # 也可用环境变量覆盖 watchlist.txt
+      WATCHLIST_FILE: "${WATCHLIST_FILE:-/data/watchlist.txt}"  # 换 ETF 名单:/data/watchlist-etf.txt
+      ASSET_TYPE: "${ASSET_TYPE:-stock}"  # etf=用 ETF 数据源(参赛用)
       # loader 只访问国内行情源(东财/新浪/上交所)和容器内 mongo，全部直连：
       # 显式置空，防止 Docker Desktop 把宿主机代理注入进来导致 SSL EOF。
       HTTP_PROXY: ""
@@ -85,6 +87,7 @@ services:
       NO_PROXY: "*"
     volumes:
       - "./watchlist.txt:/data/watchlist.txt:ro"
+      - "./watchlist-etf.txt:/data/watchlist-etf.txt:ro"
 
   # AI 信号复核官:收盘后跑一次 → 信号+复核+纸面执行+复盘报告(reports/ 目录)。
   # 手动:docker compose run --rm reviewer   (建议先跑一次 loader 更新行情)
@@ -107,12 +110,20 @@ services:
       EVAL_DAYS: "${EVAL_DAYS:-5}"
       DEEPSEEK_API_KEY: "${DEEPSEEK_API_KEY:-}"
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
-      # 资金流/新闻走东财新浪、决策走 deepseek,全直连(防宿主代理注入)
+      # 华泰模拟盘(ETF 巅峰赛):配了 HT_APIKEY 就把执行的决定发到华泰;
+      # HTSC_LIVE=1 才真下单(=正式参赛,不可逆,见 README),默认 0 干跑。
+      HT_APIKEY: "${HT_APIKEY:-}"
+      HTSC_LIVE: "${HTSC_LIVE:-0}"
+      HTSC_ORDER_LOTS: "${HTSC_ORDER_LOTS:-100}"
+      WATCHLIST_FILE: "${WATCHLIST_FILE:-/data/watchlist.txt}"  # 参赛用 /data/watchlist-etf.txt
+      # 资金流/新闻走东财新浪、决策走 deepseek,全直连(防宿主代理注入)。
+      # 华泰在 ai.zhangle.com,也需直连,放行(不走代理)。
       HTTP_PROXY: ""
       HTTPS_PROXY: ""
       NO_PROXY: "*"
     volumes:
       - "./watchlist.txt:/data/watchlist.txt:ro"
+      - "./watchlist-etf.txt:/data/watchlist-etf.txt:ro"
       - "./reports:/reports"
 
 volumes:

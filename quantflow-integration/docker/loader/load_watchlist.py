@@ -148,13 +148,48 @@ def _fetch_stock_daily(sym, start, end):
         return _retry(sina, f"新浪日线 {sym}", tries=3)
 
 
+def _fetch_etf_daily(sym, start, end):
+    """拉 ETF 日线,东财(fund_etf_hist_em)→ 新浪(fund_etf_hist_sina)。volume 单位统一为股。"""
+    import akshare as ak
+
+    b = bare(sym)
+
+    def em():
+        df = ak.fund_etf_hist_em(symbol=b, period="daily",
+                                 start_date=start, end_date=end, adjust="qfq")
+        if df is None or df.empty:
+            return df
+        df = df.rename(columns=_COLMAP)
+        df["volume"] = df["volume"].astype(float) * 100.0   # 东财:手 → 股
+        return df
+
+    def sina():
+        pre = {"SH": "sh", "SZ": "sz"}.get(sym.rsplit(".", 1)[1], "sh")
+        df = ak.fund_etf_hist_sina(symbol=f"{pre}{b}")       # 全历史,英文列 volume 单位:股
+        if df is None or df.empty:
+            return df
+        df["date"] = df["date"].astype(str)
+        d0 = f"{start[:4]}-{start[4:6]}-{start[6:8]}"
+        d1 = f"{end[:4]}-{end[4:6]}-{end[6:8]}"
+        df = df[(df["date"] >= d0) & (df["date"] <= d1)].reset_index(drop=True)
+        return df
+
+    try:
+        return _retry(em, f"东财ETF {sym}", tries=2)
+    except Exception as e:
+        print(f"[daily] 东财ETF不通({e}),换新浪源:{sym}")
+        return _retry(sina, f"新浪ETF {sym}", tries=3)
+
+
 def load_daily(db, symbols, start, end):
     col = db["stock_market"]
+    is_etf = os.getenv("ASSET_TYPE", "stock").lower() == "etf"
+    fetch = _fetch_etf_daily if is_etf else _fetch_stock_daily
     total = 0
     for sym in symbols:
         b = bare(sym)
         try:
-            df = _fetch_stock_daily(sym, start, end)
+            df = fetch(sym, start, end)
         except Exception as e:
             print(f"[daily][SKIP] {sym}: {e}")
             continue
