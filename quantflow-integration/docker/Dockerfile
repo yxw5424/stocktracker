@@ -42,6 +42,9 @@ COPY docker/patched_quantflow/backtest_stock_node.py /app/panda_quantflow/src/pa
 COPY docker/patched_quantflow/order_quotation_verify.py /app/panda_quantflow/src/panda_backtest/backtest_common/order/common/order_quotation_verify.py
 # 回测区间上限:原平台硬编码 3 年(SaaS 省算力,非技术必需);本地放宽为可配(默认12年)。
 COPY docker/patched_quantflow/run_workflow_utils.py /app/panda_quantflow/src/panda_server/utils/run_workflow_utils.py
+# 撮合方式:原平台硬编码当日开盘撮合;开成 MATCHING_TYPE 环境变量(0=收盘撮合,
+# 用于验证"尾盘执行"约定,见 BACKTEST-AUDIT.md)。默认 1 与原行为一致。
+COPY docker/patched_quantflow/main_workflow_stock.py /app/panda_quantflow/src/panda_backtest/main_workflow_stock.py
 
 WORKDIR /app/panda_quantflow/src
 # 容器内绑 0.0.0.0（靠 compose 的 127.0.0.1 端口映射做网络隔离）；LocalGuard 仍拦跨站请求
