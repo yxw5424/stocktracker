@@ -48,10 +48,10 @@ def norm_symbol(code: str) -> str:
         return ""
     if "." in code:
         return code
-    if code[0] in ("6", "9"):
-        return code + ".SH"
-    if code[0] == "8" or code[:3] in ("920", "430"):
+    if code[0] == "8" or code[:3] in ("920", "430"):   # 北交所优先判(920 别被 9→SH 截胡)
         return code + ".BJ"
+    if code[0] in ("5", "6", "9"):   # 5xxxxx=沪市ETF/基金, 6=沪A, 9=沪B
+        return code + ".SH"
     return code + ".SZ"
 
 
@@ -424,6 +424,12 @@ def main():
     print(f"区间 {start} ~ {end}")
 
     db = mongo_db()
+    # 清理早期版本的错后缀数据:5开头是沪市ETF/基金,深市不存在 5xxxxx,
+    # 之前被错存成 .SZ 的行情/信息全部删除(正确数据会以 .SH 重新灌入)。
+    for coll in ("stock_market", "stock_info_new"):
+        n = db[coll].delete_many({"symbol": {"$regex": r"^5\d{5}\.SZ$"}}).deleted_count
+        if n:
+            print(f"[清理] {coll} 删除错后缀(5xxxxx.SZ)文档 {n} 条")
     load_info(db, symbols)
     load_calendar(db, end)
     load_benchmarks(db, start, end)

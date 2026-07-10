@@ -100,14 +100,17 @@ def _order_qty(price):
     return ORDER_LOTS, "固定手数兜底"
 
 
-def broker_order(side, symbol, price, log_lines):
+def broker_order(side, symbol, price, log_lines, half=False):
     """把决定映射成华泰模拟盘下单;side 含'买'→buy,含'卖'→sell。返回结果字符串。
-    买入按账户资产比例定量(等权),卖出全部可卖(由后端按持仓校验)。"""
+    买入按账户资产比例定量(等权),AI 判「半仓」时减半;卖出由后端按持仓校验。"""
     if _BROKER is None:
         return ""
     code, ex = split_symbol(symbol)
     direction = "buy" if "买" in side else "sell"
     qty, how = _order_qty(price)
+    if half and direction == "buy" and qty > 100:
+        qty = max(100, int(qty / 2 / 100) * 100)
+        how += ",AI判半仓已减半"
     r = _BROKER.submit_order(direction, code, ex, qty,
                              order_type="limit", price=round(float(price), 3))
     if r.get("dry_run"):
@@ -131,19 +134,26 @@ def mongo_db():
     return cli[os.getenv("MONGO_DB", "panda")]
 
 
+def _norm(code):
+    """代码归一化:5/6/9→SH,8/920/430→BJ(优先),其余→SZ;已带后缀原样。"""
+    code = code.strip().upper()
+    if not code or "." in code:
+        return code
+    if code[0] == "8" or code[:3] in ("920", "430"):
+        return code + ".BJ"
+    return code + (".SH" if code[0] in "569" else ".SZ")
+
+
 def read_watchlist():
     path = os.getenv("WATCHLIST_FILE", "/data/watchlist.txt")
-    out = []
+    raw = []
     if os.path.exists(path):
         for line in open(path, encoding="utf-8"):
             line = line.split("#", 1)[0].strip()
             if line:
-                code = line.upper()
-                if "." not in code:
-                    code += ".SH" if code[0] in "69" else (".BJ" if code[0] == "8" or code[:3] in ("920", "430") else ".SZ")
-                out.append(code)
-    env = os.getenv("WATCHLIST", "")
-    out += [c.strip().upper() for c in env.split(",") if c.strip()]
+                raw.append(line)
+    raw += [c for c in os.getenv("WATCHLIST", "").split(",") if c.strip()]
+    out = [s for s in (_norm(c) for c in raw) if s]
     return list(dict.fromkeys(out))
 
 
@@ -564,7 +574,8 @@ def main():
                   f"- 关键事实:{json.dumps(ctx, ensure_ascii=False)[:400]}",
                   f"- **AI 决定:{d['decision']}**(信心 {d.get('confidence')}) —— {d.get('reason','')}"]
         if d["decision"] in ("执行", "半仓"):
-            ob = broker_order(sig["side"], sig["symbol"], sig["price"], lines)
+            ob = broker_order(sig["side"], sig["symbol"], sig["price"], lines,
+                              half=(d["decision"] == "半仓"))
             if ob:
                 lines.append(ob)
         lines.append("")
