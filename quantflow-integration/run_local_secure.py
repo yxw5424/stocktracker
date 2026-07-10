@@ -75,6 +75,27 @@ def build_app():
         app.mount("/reports", StaticFiles(directory=rep_dir, html=True), name="reports")
     except Exception as exc:
         print(f"[warn] /reports 静态目录挂载失败(不影响平台): {exc}")
+
+    # 只读看板:/dash 页面 + /dash/data JSON(不放任何会改状态的接口)
+    try:
+        import sys
+        sys.path.insert(0, "/app/panda_quantflow/src/panda_plugins/custom")
+        sys.path.insert(0, os.path.dirname(__file__))
+        import dashboard as _dash
+        from starlette.responses import HTMLResponse, JSONResponse
+
+        async def _dash_page(request):
+            return HTMLResponse(_dash.DASH_HTML)
+
+        async def _dash_data(request):
+            from fastapi.concurrency import run_in_threadpool
+            return JSONResponse(await run_in_threadpool(_dash.collect))
+
+        app.add_route("/dash", _dash_page, methods=["GET"])
+        app.add_route("/dash/data", _dash_data, methods=["GET"])
+        print("  只读看板 -> http://127.0.0.1:8000/dash")
+    except Exception as exc:
+        print(f"[warn] /dash 看板挂载失败(不影响平台): {exc}")
     return LocalGuard(app)
 
 
