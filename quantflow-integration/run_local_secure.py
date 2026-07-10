@@ -67,6 +67,14 @@ class LocalGuard:
 def build_app():
     # 导入平台 app（不会触发其 __main__ 里的 0.0.0.0 启动）
     from panda_server.main import app
+    # 把回测可视化报告目录挂成网页:http://127.0.0.1:8000/reports/latest.html
+    try:
+        from starlette.staticfiles import StaticFiles
+        rep_dir = os.getenv("REPORT_DIR", "/reports")
+        os.makedirs(rep_dir, exist_ok=True)
+        app.mount("/reports", StaticFiles(directory=rep_dir, html=True), name="reports")
+    except Exception as exc:
+        print(f"[warn] /reports 静态目录挂载失败(不影响平台): {exc}")
     return LocalGuard(app)
 
 
