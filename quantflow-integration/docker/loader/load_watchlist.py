@@ -59,6 +59,23 @@ def bare(sym: str) -> str:
     return sym.split(".")[0]
 
 
+def limit_band(sym: str) -> float:
+    """按板块规则给涨跌幅带宽(回测引擎会用 limit_up/down 拒单和截价,写错会造成
+    假拒单/假优价成交)。688/300=20%,北交所=30%,588(科创ETF)/159(创业板类ETF按
+    环境变量 ETF20 名单)=20%,其余 10%。ETF20 例:ETF20=588000,588170,159915"""
+    b, is_etf = bare(sym), os.getenv("ASSET_TYPE", "stock").lower() == "etf"
+    if is_etf:
+        etf20 = {x.strip() for x in os.getenv("ETF20", "").split(",") if x.strip()}
+        if b.startswith("588") or b in etf20:
+            return 0.20
+        return 0.10
+    if sym.endswith(".BJ"):
+        return 0.30
+    if b.startswith(("688", "689", "300", "301", "302")):
+        return 0.20
+    return 0.10
+
+
 def read_watchlist() -> list:
     raw = []
     env = os.getenv("WATCHLIST", "")
@@ -197,6 +214,7 @@ def load_daily(db, symbols, start, end):
             print(f"[daily][EMPTY] {sym}")
             continue
         df = df.sort_values("date").reset_index(drop=True)
+        band = limit_band(sym)
         prev_close = None
         ops = []
         for _, r in df.iterrows():
@@ -211,7 +229,8 @@ def load_daily(db, symbols, start, end):
                 "volume": float(r["volume"]),   # 已在 _fetch_stock_daily 里统一为「股」
                 "turnover": float(r.get("turnover", 0) or 0),
                 "preclose": pc, "pre_close": pc,
-                "limit_up": round(pc * 1.1, 2), "limit_down": round(pc * 0.9, 2),
+                "limit_up": round(pc * (1 + band), 3 if is_etf else 2),
+                "limit_down": round(pc * (1 - band), 3 if is_etf else 2),
                 "trade_status": "交易",
             }
             ops.append(pymongo.UpdateOne(
