@@ -79,6 +79,14 @@ HARD_RULES = """
    空结果是空表——任何一个没处理好都会被下面的 try/except 吞掉，导致「一笔不交易、收益0%」。
    正确做法：在 handle_data 里每天把 bar[s].close 追加进 context.hist[s] 列表，从列表算均线/动量。
 
+2.5【严禁前视/马后炮——最重要的一条】本引擎按【当日开盘价】撮合,但 bar[s].close 是
+   当日收盘价(决策那一刻现实中还不存在)。所以:
+   - 一切买卖信号只准用 context.hist 里【已入库的历史收盘】(即截至昨日);
+   - 当日的 bar[s].close 只能在 handle_data 的【最后】追加进 context.hist,
+     决策代码段禁止读取 bar[s].close/high/low/volume;
+   - "现价"一律用 context.hist[s][-1](昨收)近似。
+   违反 = 用未来数据交易,回测数字全部作废。
+
 3. 你能用的接口只有这些，签名一字不差：
    - bar[symbol]：当前bar，symbol 形如 '562500.SH'。停牌返回 None，必须判空：
          b = bar[s]
@@ -116,32 +124,23 @@ def initialize(context):
 
 def handle_data(context, bar):
     acc = context.stock_account_dict['8888']
-    prices = {}
-    for s in context.universe:
-        try:
-            b = bar[s]
-            if b is None or getattr(b,'close',None) in (None,0):
-                continue
-            prices[s] = b.close
-            context.hist[s].append(b.close)
-            if len(context.hist[s]) > 250:
-                context.hist[s] = context.hist[s][-250:]
-        except Exception as e:
-            SRLogger.info('数据异常 %s: %s' % (s, e)); continue
 
-    for s in list(context.hold):                       # 先处理卖出
+    # ===== 决策阶段:只用 context.hist(截至昨收),禁止碰今天的 bar =====
+    last = {s: context.hist[s][-1] for s in context.universe if context.hist.get(s)}
+
+    for s in list(context.hold):                       # 先处理卖出(信号=昨收,成交=今开)
         h = context.hist.get(s, [])
-        if s in prices and len(h) >= 20:
+        if s in last and len(h) >= 20:
             ma20 = sum(h[-20:]) / 20
-            if prices[s] < ma20:                       # 跌破20日线卖出
+            if last[s] < ma20:                         # 昨收跌破20日线卖出
                 pos = acc.positions.get(s)
                 if pos and pos.sellable > 0:
                     order_shares('8888', s, -pos.sellable, style=MarketOrderStyle)
                     context.hold.discard(s)
-                    SRLogger.info('卖出 %s @ %.3f' % (s, prices[s]))
+                    SRLogger.info('卖出 %s (按昨收%.3f出信号)' % (s, last[s]))
 
     for s in context.universe:                         # 再处理买入
-        if s in context.hold or s not in prices:
+        if s in context.hold or s not in last:
             continue
         h = context.hist.get(s, [])
         if len(h) < 60:
@@ -149,15 +148,28 @@ def handle_data(context, bar):
         ma20, ma60 = sum(h[-20:])/20, sum(h[-60:])/60
         if ma20 > ma60 and len(context.hold) < 4:      # 金叉且持仓未满
             budget = acc.total_value * 0.24
-            qty = int(budget / prices[s] / 100) * 100
-            if qty >= 100 and acc.cash >= qty * prices[s]:
+            qty = int(budget / last[s] / 100) * 100
+            if qty >= 100 and acc.cash >= qty * last[s]:
                 order_shares('8888', s, qty, style=MarketOrderStyle)
                 context.hold.add(s)
-                SRLogger.info('买入 %s %d股 @ %.3f' % (s, qty, prices[s]))
+                SRLogger.info('买入 %s %d股 (按昨收%.3f定量)' % (s, qty, last[s]))
             else:
                 SRLogger.info('想买 %s 但资金不足或不足100股' % s)
+
+    # ===== 收盘入库阶段:今天的收盘价此刻才写入,下个交易日才可用 =====
+    for s in context.universe:
+        try:
+            b = bar[s]
+            if b is None or getattr(b,'close',None) in (None,0):
+                continue
+            context.hist[s].append(b.close)
+            if len(context.hist[s]) > 250:
+                context.hist[s] = context.hist[s][-250:]
+        except Exception as e:
+            SRLogger.info('数据异常 %s: %s' % (s, e)); continue
 ```
-这个骨架能真实成交。你的任务是把里面的信号逻辑换成用户要的策略，数据缓存/下单/日志结构保持不变。
+这个骨架能真实成交且无前视。你的任务是把里面的信号逻辑换成用户要的策略，
+【决策在前、入库在后】的两段结构和下单/日志写法必须保持不变。
 """
 
 

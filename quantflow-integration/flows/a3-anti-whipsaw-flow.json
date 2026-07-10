@@ -1,0 +1,892 @@
+{
+  "format_version": "1.0",
+  "name": "A3防抖动调优(无前视,5变体)",
+  "description": "v2无前视版全区间只剩22%/-49%DD,诊断=信号晚一天时高换手的追高杀跌磨损。本流程在干净规则下对比4种防抖动手段:卖出缓冲(MA-2%)、排名滞回(跌出前5才卖)、二者组合、组合+隔周调仓。全区间2022-2026H1。目标:找到回撤可控、不靠前视也有真边际的版本;成交笔数应显著少于基线的382笔。",
+  "litegraph": {
+    "last_node_id": 11,
+    "last_link_id": 10,
+    "nodes": [
+      {
+        "id": 1,
+        "type": "StockBacktestControl",
+        "title": "基线v2(加码,无防抖) 全区间",
+        "pos": [
+          80,
+          40
+        ],
+        "size": [
+          420,
+          340
+        ],
+        "flags": {
+          "uuid": "898367ae-30f1-48d1-828e-538fbb63ac8e"
+        },
+        "order": 0,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "策略代码",
+            "type": 0,
+            "link": null,
+            "fieldName": "code",
+            "hide": false
+          },
+          {
+            "name": "因子值",
+            "type": 0,
+            "link": null,
+            "fieldName": "factors",
+            "hide": false
+          },
+          {
+            "name": "初始资金",
+            "type": 0,
+            "link": null,
+            "fieldName": "start_capital",
+            "hide": true
+          },
+          {
+            "name": "基准指数",
+            "type": 0,
+            "link": null,
+            "fieldName": "standard_symbol",
+            "hide": false
+          },
+          {
+            "name": "佣金率",
+            "type": 0,
+            "link": null,
+            "fieldName": "commission_rate",
+            "hide": true
+          },
+          {
+            "name": "回测频率",
+            "type": 0,
+            "link": null,
+            "fieldName": "frequency",
+            "hide": true
+          },
+          {
+            "name": "回测开始时间",
+            "type": 0,
+            "link": null,
+            "fieldName": "start_date",
+            "hide": true
+          },
+          {
+            "name": "回测结束时间",
+            "type": 0,
+            "link": null,
+            "fieldName": "end_date",
+            "hide": true
+          }
+        ],
+        "outputs": [
+          {
+            "name": "回测id",
+            "type": 0,
+            "links": [
+              1,
+              2
+            ],
+            "fieldName": "backtest_id",
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "策略代码": "# -*- coding: utf-8 -*-\n# A3「慢进快出」动量轮动 —— v2 无前视版(clean)。\n#\n# 为什么要有这个版本:审计发现平台工作流回测 matching_type=1(当日【开盘价】撮合),\n# 而 v1 在 handle_data 里读 bar.close(当日收盘,盘中根本不可知)算信号 → 决策用了\n# 未来的收盘价、成交却按当天开盘 = 前视偏差,回测数字系统性偏乐观。\n#\n# v2 的修法:所有信号只用【昨日及更早的收盘价】,当日开盘成交 ——\n# 这正是实盘复核官的真实节奏:T日收盘后算信号 → T+1 开盘成交。\n#   · 每日卖出检查:用截至昨收的序列判断,今晨开盘卖出。\n#   · 调仓改在【周一】:用上周五收盘的动量排序,周一开盘买入(实盘周五收盘跑\n#     reviewer、周一开盘成交,完全对齐)。\n#   · 当日收盘价在 handle_data 末尾才入库,决策环节碰不到。\n# 其余规则(MA20 止损、8% 回撤、20日动量+MA60 过滤、top3、不跳过已持仓的加码\n# 行为)与冻结版 v1 保持一致,便于对比\"前视偏差到底虚增了多少\"。\nfrom panda_backtest.api.api import *\nfrom panda_backtest.api.stock_api import *\nimport numpy as np\nimport pandas as pd\nimport datetime\n\ndef initialize(context):\n    context.universe = ['562500.SH', '159770.SZ', '512760.SH', '588000.SH', '159819.SZ', '588170.SH', '515070.SH', '513050.SH', '510300.SH', '518880.SH']\n    context.hist = {s: [] for s in context.universe}   # 只存「昨日及以前」的收盘\n    context.hold = set()\n    context.max_price = {}  # 持仓期间最高(昨)收盘\n    context.buy_day = 0  # 周一=0:用上周五收盘信号,周一开盘成交(对齐实盘)\n\ndef handle_data(context, bar):\n    acc = context.stock_account_dict['8888']\n    today = context.trade_date\n    try:\n        dt = datetime.datetime.strptime(str(today), '%Y%m%d')\n        weekday = dt.weekday()\n    except:\n        weekday = -1\n\n    # ===== 决策阶段:只允许用 context.hist(截至昨收),不碰今天的 bar =====\n    last = {}   # 各标的最近一个「已知」收盘价(=昨收)\n    for s in context.universe:\n        h = context.hist.get(s, [])\n        if h:\n            last[s] = h[-1]\n\n    # 每日卖出检查(信号=昨收,成交=今开)\n    for s in list(context.hold):\n        if s not in last:\n            continue\n        h = context.hist.get(s, [])\n        if len(h) < 20:\n            continue\n        ma20 = sum(h[-20:]) / 20\n        px = last[s]\n        sold = False\n        if px < ma20:\n            pos = acc.positions.get(s)\n            if pos and pos.sellable > 0:\n                order_shares('8888', s, -pos.sellable, style=MarketOrderStyle)\n                context.hold.discard(s)\n                context.max_price.pop(s, None)\n                SRLogger.info('卖出 %s (昨收破20日线) 今开成交' % s)\n                sold = True\n        if sold:\n            continue\n        max_p = context.max_price.get(s, px)\n        if px > max_p:\n            context.max_price[s] = px\n        elif max_p > 0 and (max_p - px) / max_p >= 0.08:\n            pos = acc.positions.get(s)\n            if pos and pos.sellable > 0:\n                order_shares('8888', s, -pos.sellable, style=MarketOrderStyle)\n                context.hold.discard(s)\n                context.max_price.pop(s, None)\n                SRLogger.info('卖出 %s (较高点回撤8%%) 今开成交' % s)\n\n    # 周一调仓(动量排序基于上周五收盘)\n    if weekday == context.buy_day:\n        candidates = []\n        for s in context.universe:\n            if s not in last:\n                continue\n            h = context.hist.get(s, [])\n            if len(h) < 60:\n                continue\n            p20 = h[-20]\n            if not p20:\n                continue\n            momentum = last[s] / p20 - 1\n            if momentum <= 0:\n                continue\n            ma60 = sum(h[-60:]) / 60\n            if last[s] <= ma60:\n                continue\n            candidates.append((s, momentum))\n        candidates.sort(key=lambda x: x[1], reverse=True)\n        top3 = [c[0] for c in candidates[:3]]\n\n        for s in list(context.hold):\n            if s not in top3:\n                pos = acc.positions.get(s)\n                if pos and pos.sellable > 0:\n                    order_shares('8888', s, -pos.sellable, style=MarketOrderStyle)\n                    context.hold.discard(s)\n                    context.max_price.pop(s, None)\n                    SRLogger.info('卖出 %s (调仓) 今开成交' % s)\n\n        if top3:\n            budget_per = acc.total_value * 0.95 / len(top3)\n            for s in top3:\n                if s not in last:\n                    continue\n                qty = int(budget_per / last[s] / 100) * 100\n                if qty >= 100 and acc.cash >= qty * last[s]:\n                    order_shares('8888', s, qty, style=MarketOrderStyle)\n                    context.hold.add(s)\n                    context.max_price[s] = last[s]\n                    SRLogger.info('买入 %s %d股 (按昨收%.3f定量,今开成交)' % (s, qty, last[s]))\n                else:\n                    SRLogger.info('想买 %s 但资金不足或不足100股' % s)\n\n    # ===== 收盘入库阶段:今天的收盘价此刻才写进历史,下个交易日才可用 =====\n    for s in context.universe:\n        try:\n            b = bar[s]\n            if b is None or getattr(b, 'close', None) in (None, 0):\n                continue\n            context.hist[s].append(b.close)\n            if len(context.hist[s]) > 250:\n                context.hist[s] = context.hist[s][-250:]\n        except Exception as e:\n            SRLogger.info('数据异常 %s: %s' % (s, e))\n            continue\n",
+          "初始资金": 1000000,
+          "基准指数": "沪深300",
+          "佣金率": 1,
+          "回测频率": "1d",
+          "回测开始时间": "20220101",
+          "回测结束时间": "20260630"
+        }
+      },
+      {
+        "id": 2,
+        "type": "BackTestResultControl",
+        "title": "回测结果(点开看图)",
+        "pos": [
+          560,
+          40
+        ],
+        "size": [
+          320,
+          140
+        ],
+        "flags": {
+          "uuid": "7a3cad54-e5f5-4a8f-a754-7f64fba4f637"
+        },
+        "order": 5,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "回测任务",
+            "type": 0,
+            "link": 1,
+            "fieldName": "task_id",
+            "hide": false
+          }
+        ],
+        "outputs": [
+          {
+            "name": "图表绘制",
+            "type": 0,
+            "links": [],
+            "fieldName": "task_id",
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "回测任务": "error"
+        }
+      },
+      {
+        "id": 3,
+        "type": "StockBacktestControl",
+        "title": "A缓冲退出(MA20-2%,回撤10%) 全区间",
+        "pos": [
+          80,
+          440
+        ],
+        "size": [
+          420,
+          340
+        ],
+        "flags": {
+          "uuid": "d3c00f05-5d24-4615-8ea6-3d6a769f9963"
+        },
+        "order": 1,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "策略代码",
+            "type": 0,
+            "link": null,
+            "fieldName": "code",
+            "hide": false
+          },
+          {
+            "name": "因子值",
+            "type": 0,
+            "link": null,
+            "fieldName": "factors",
+            "hide": false
+          },
+          {
+            "name": "初始资金",
+            "type": 0,
+            "link": null,
+            "fieldName": "start_capital",
+            "hide": true
+          },
+          {
+            "name": "基准指数",
+            "type": 0,
+            "link": null,
+            "fieldName": "standard_symbol",
+            "hide": false
+          },
+          {
+            "name": "佣金率",
+            "type": 0,
+            "link": null,
+            "fieldName": "commission_rate",
+            "hide": true
+          },
+          {
+            "name": "回测频率",
+            "type": 0,
+            "link": null,
+            "fieldName": "frequency",
+            "hide": true
+          },
+          {
+            "name": "回测开始时间",
+            "type": 0,
+            "link": null,
+            "fieldName": "start_date",
+            "hide": true
+          },
+          {
+            "name": "回测结束时间",
+            "type": 0,
+            "link": null,
+            "fieldName": "end_date",
+            "hide": true
+          }
+        ],
+        "outputs": [
+          {
+            "name": "回测id",
+            "type": 0,
+            "links": [
+              3,
+              4
+            ],
+            "fieldName": "backtest_id",
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "策略代码": "# -*- coding: utf-8 -*-\n# 无前视动量轮动·参数化模板 —— v2_clean 崩盘(全区间-49%DD)后的防抖动改造底座。\n# 诊断:信号晚一天(实盘现实)时,高换手的\"追高杀跌\"磨损吃掉全部利润;\n# 对策全在 CFG 里,各变体只改 CFG,由 flows/a3-anti-whipsaw-flow.json 对比:\n#   exit_buffer  卖出缓冲:昨收 < MA(exit_ma)×(1-buffer) 才卖(防贴线抖动)\n#   trail        高点回撤止损阈值\n#   keep_rank    排名滞回:已持仓跌出前 keep_rank 名才调仓卖出(买入仍只买前 top_n)\n#   biweekly     True=隔周调仓(ISO周号偶数),换手减半\n#   pyramid      True=调仓日对已持仓的领先者继续加码(v1旧行为)\n# 决策只用截至昨收的 context.hist,当日收盘在 handle_data 末尾才入库 —— 无前视。\nfrom panda_backtest.api.api import *\nfrom panda_backtest.api.stock_api import *\nimport numpy as np\nimport pandas as pd\nimport datetime\n\nCFG = {'exit_ma': 20, 'exit_buffer': 0.02, 'trail': 0.10,\n       'mom_days': 20, 'ma_filter': 60, 'top_n': 3, 'keep_rank': 3,\n       'biweekly': False, 'pyramid': False}\n\ndef initialize(context):\n    context.universe = ['562500.SH', '159770.SZ', '512760.SH', '588000.SH', '159819.SZ', '588170.SH', '515070.SH', '513050.SH', '510300.SH', '518880.SH']\n    context.hist = {s: [] for s in context.universe}\n    context.hold = set()\n    context.max_price = {}\n    context.buy_day = 0  # 周一:用上周五收盘信号,周一开盘成交(对齐实盘)\n\ndef _rank(context, last):\n    \"\"\"按动量排序的候选表 [(sym, momentum), ...],只含通过过滤的。\"\"\"\n    out = []\n    for s in context.universe:\n        h = context.hist.get(s, [])\n        if s not in last or len(h) < max(CFG['ma_filter'], CFG['mom_days']):\n            continue\n        p0 = h[-CFG['mom_days']]\n        if not p0:\n            continue\n        mom = last[s] / p0 - 1\n        if mom <= 0:\n            continue\n        if last[s] <= sum(h[-CFG['ma_filter']:]) / CFG['ma_filter']:\n            continue\n        out.append((s, mom))\n    out.sort(key=lambda x: x[1], reverse=True)\n    return out\n\ndef handle_data(context, bar):\n    acc = context.stock_account_dict['8888']\n    try:\n        dt = datetime.datetime.strptime(str(context.trade_date), '%Y%m%d')\n        weekday, week_no = dt.weekday(), dt.isocalendar()[1]\n    except:\n        weekday, week_no = -1, 0\n\n    # ===== 决策阶段:只用截至昨收的 hist =====\n    last = {s: context.hist[s][-1] for s in context.universe if context.hist.get(s)}\n\n    # 每日退出:MA 破位带缓冲 + 高点回撤\n    for s in list(context.hold):\n        if s not in last:\n            continue\n        h = context.hist.get(s, [])\n        if len(h) < CFG['exit_ma']:\n            continue\n        px = last[s]\n        ma = sum(h[-CFG['exit_ma']:]) / CFG['exit_ma']\n        sold = False\n        if px < ma * (1 - CFG['exit_buffer']):\n            pos = acc.positions.get(s)\n            if pos and pos.sellable > 0:\n                order_shares('8888', s, -pos.sellable, style=MarketOrderStyle)\n                context.hold.discard(s)\n                context.max_price.pop(s, None)\n                SRLogger.info('卖出 %s (昨收破MA%d带%.0f%%缓冲)' % (s, CFG['exit_ma'], CFG['exit_buffer'] * 100))\n                sold = True\n        if sold:\n            continue\n        mx = context.max_price.get(s, px)\n        if px > mx:\n            context.max_price[s] = px\n        elif mx > 0 and (mx - px) / mx >= CFG['trail']:\n            pos = acc.positions.get(s)\n            if pos and pos.sellable > 0:\n                order_shares('8888', s, -pos.sellable, style=MarketOrderStyle)\n                context.hold.discard(s)\n                context.max_price.pop(s, None)\n                SRLogger.info('卖出 %s (较高点回撤%.0f%%)' % (s, CFG['trail'] * 100))\n\n    # 调仓日:周一(可选隔周)\n    rebal = (weekday == context.buy_day) and (not CFG['biweekly'] or week_no % 2 == 0)\n    if rebal:\n        ranked = _rank(context, last)\n        order = [s for s, _ in ranked]\n        top_buy = order[:CFG['top_n']]\n        keep = set(order[:max(CFG['keep_rank'], CFG['top_n'])])\n\n        # 滞回卖出:已持仓跌出前 keep_rank 名才卖(不是跌出 top_n 就卖)\n        for s in list(context.hold):\n            if s not in keep:\n                pos = acc.positions.get(s)\n                if pos and pos.sellable > 0:\n                    order_shares('8888', s, -pos.sellable, style=MarketOrderStyle)\n                    context.hold.discard(s)\n                    context.max_price.pop(s, None)\n                    SRLogger.info('卖出 %s (跌出前%d名)' % (s, CFG['keep_rank']))\n\n        # 买入:只补空出的仓位;pyramid=False 时跳过已持仓\n        targets = [s for s in top_buy if CFG['pyramid'] or s not in context.hold]\n        room = max(CFG['top_n'] - (0 if CFG['pyramid'] else len(context.hold)), 0)\n        targets = targets[:room] if not CFG['pyramid'] else targets\n        if targets:\n            budget_per = acc.total_value * 0.95 / CFG['top_n']\n            for s in targets:\n                if s not in last:\n                    continue\n                qty = int(budget_per / last[s] / 100) * 100\n                if qty >= 100 and acc.cash >= qty * last[s]:\n                    order_shares('8888', s, qty, style=MarketOrderStyle)\n                    context.hold.add(s)\n                    context.max_price[s] = last[s]\n                    SRLogger.info('买入 %s %d股 (按昨收%.3f定量)' % (s, qty, last[s]))\n                else:\n                    SRLogger.info('想买 %s 但资金不足或不足100股' % s)\n\n    # ===== 收盘入库:今天的收盘价此刻才可见于下个交易日 =====\n    for s in context.universe:\n        try:\n            b = bar[s]\n            if b is None or getattr(b, 'close', None) in (None, 0):\n                continue\n            context.hist[s].append(b.close)\n            if len(context.hist[s]) > 250:\n                context.hist[s] = context.hist[s][-250:]\n        except Exception as e:\n            SRLogger.info('数据异常 %s: %s' % (s, e))\n            continue\n",
+          "初始资金": 1000000,
+          "基准指数": "沪深300",
+          "佣金率": 1,
+          "回测频率": "1d",
+          "回测开始时间": "20220101",
+          "回测结束时间": "20260630"
+        }
+      },
+      {
+        "id": 4,
+        "type": "BackTestResultControl",
+        "title": "回测结果(点开看图)",
+        "pos": [
+          560,
+          440
+        ],
+        "size": [
+          320,
+          140
+        ],
+        "flags": {
+          "uuid": "a360c99a-1ced-45d6-afec-28aed14f5450"
+        },
+        "order": 6,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "回测任务",
+            "type": 0,
+            "link": 3,
+            "fieldName": "task_id",
+            "hide": false
+          }
+        ],
+        "outputs": [
+          {
+            "name": "图表绘制",
+            "type": 0,
+            "links": [],
+            "fieldName": "task_id",
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "回测任务": "error"
+        }
+      },
+      {
+        "id": 5,
+        "type": "StockBacktestControl",
+        "title": "B排名滞回(跌出前5才卖) 全区间",
+        "pos": [
+          80,
+          840
+        ],
+        "size": [
+          420,
+          340
+        ],
+        "flags": {
+          "uuid": "0e4c413b-b606-43f1-8535-9bcc2520535f"
+        },
+        "order": 2,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "策略代码",
+            "type": 0,
+            "link": null,
+            "fieldName": "code",
+            "hide": false
+          },
+          {
+            "name": "因子值",
+            "type": 0,
+            "link": null,
+            "fieldName": "factors",
+            "hide": false
+          },
+          {
+            "name": "初始资金",
+            "type": 0,
+            "link": null,
+            "fieldName": "start_capital",
+            "hide": true
+          },
+          {
+            "name": "基准指数",
+            "type": 0,
+            "link": null,
+            "fieldName": "standard_symbol",
+            "hide": false
+          },
+          {
+            "name": "佣金率",
+            "type": 0,
+            "link": null,
+            "fieldName": "commission_rate",
+            "hide": true
+          },
+          {
+            "name": "回测频率",
+            "type": 0,
+            "link": null,
+            "fieldName": "frequency",
+            "hide": true
+          },
+          {
+            "name": "回测开始时间",
+            "type": 0,
+            "link": null,
+            "fieldName": "start_date",
+            "hide": true
+          },
+          {
+            "name": "回测结束时间",
+            "type": 0,
+            "link": null,
+            "fieldName": "end_date",
+            "hide": true
+          }
+        ],
+        "outputs": [
+          {
+            "name": "回测id",
+            "type": 0,
+            "links": [
+              5,
+              6
+            ],
+            "fieldName": "backtest_id",
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "策略代码": "# -*- coding: utf-8 -*-\n# 无前视动量轮动·参数化模板 —— v2_clean 崩盘(全区间-49%DD)后的防抖动改造底座。\n# 诊断:信号晚一天(实盘现实)时,高换手的\"追高杀跌\"磨损吃掉全部利润;\n# 对策全在 CFG 里,各变体只改 CFG,由 flows/a3-anti-whipsaw-flow.json 对比:\n#   exit_buffer  卖出缓冲:昨收 < MA(exit_ma)×(1-buffer) 才卖(防贴线抖动)\n#   trail        高点回撤止损阈值\n#   keep_rank    排名滞回:已持仓跌出前 keep_rank 名才调仓卖出(买入仍只买前 top_n)\n#   biweekly     True=隔周调仓(ISO周号偶数),换手减半\n#   pyramid      True=调仓日对已持仓的领先者继续加码(v1旧行为)\n# 决策只用截至昨收的 context.hist,当日收盘在 handle_data 末尾才入库 —— 无前视。\nfrom panda_backtest.api.api import *\nfrom panda_backtest.api.stock_api import *\nimport numpy as np\nimport pandas as pd\nimport datetime\n\nCFG = {'exit_ma': 20, 'exit_buffer': 0.00, 'trail': 0.08,\n       'mom_days': 20, 'ma_filter': 60, 'top_n': 3, 'keep_rank': 5,\n       'biweekly': False, 'pyramid': False}\n\ndef initialize(context):\n    context.universe = ['562500.SH', '159770.SZ', '512760.SH', '588000.SH', '159819.SZ', '588170.SH', '515070.SH', '513050.SH', '510300.SH', '518880.SH']\n    context.hist = {s: [] for s in context.universe}\n    context.hold = set()\n    context.max_price = {}\n    context.buy_day = 0  # 周一:用上周五收盘信号,周一开盘成交(对齐实盘)\n\ndef _rank(context, last):\n    \"\"\"按动量排序的候选表 [(sym, momentum), ...],只含通过过滤的。\"\"\"\n    out = []\n    for s in context.universe:\n        h = context.hist.get(s, [])\n        if s not in last or len(h) < max(CFG['ma_filter'], CFG['mom_days']):\n            continue\n        p0 = h[-CFG['mom_days']]\n        if not p0:\n            continue\n        mom = last[s] / p0 - 1\n        if mom <= 0:\n            continue\n        if last[s] <= sum(h[-CFG['ma_filter']:]) / CFG['ma_filter']:\n            continue\n        out.append((s, mom))\n    out.sort(key=lambda x: x[1], reverse=True)\n    return out\n\ndef handle_data(context, bar):\n    acc = context.stock_account_dict['8888']\n    try:\n        dt = datetime.datetime.strptime(str(context.trade_date), '%Y%m%d')\n        weekday, week_no = dt.weekday(), dt.isocalendar()[1]\n    except:\n        weekday, week_no = -1, 0\n\n    # ===== 决策阶段:只用截至昨收的 hist =====\n    last = {s: context.hist[s][-1] for s in context.universe if context.hist.get(s)}\n\n    # 每日退出:MA 破位带缓冲 + 高点回撤\n    for s in list(context.hold):\n        if s not in last:\n            continue\n        h = context.hist.get(s, [])\n        if len(h) < CFG['exit_ma']:\n            continue\n        px = last[s]\n        ma = sum(h[-CFG['exit_ma']:]) / CFG['exit_ma']\n        sold = False\n        if px < ma * (1 - CFG['exit_buffer']):\n            pos = acc.positions.get(s)\n            if pos and pos.sellable > 0:\n                order_shares('8888', s, -pos.sellable, style=MarketOrderStyle)\n                context.hold.discard(s)\n                context.max_price.pop(s, None)\n                SRLogger.info('卖出 %s (昨收破MA%d带%.0f%%缓冲)' % (s, CFG['exit_ma'], CFG['exit_buffer'] * 100))\n                sold = True\n        if sold:\n            continue\n        mx = context.max_price.get(s, px)\n        if px > mx:\n            context.max_price[s] = px\n        elif mx > 0 and (mx - px) / mx >= CFG['trail']:\n            pos = acc.positions.get(s)\n            if pos and pos.sellable > 0:\n                order_shares('8888', s, -pos.sellable, style=MarketOrderStyle)\n                context.hold.discard(s)\n                context.max_price.pop(s, None)\n                SRLogger.info('卖出 %s (较高点回撤%.0f%%)' % (s, CFG['trail'] * 100))\n\n    # 调仓日:周一(可选隔周)\n    rebal = (weekday == context.buy_day) and (not CFG['biweekly'] or week_no % 2 == 0)\n    if rebal:\n        ranked = _rank(context, last)\n        order = [s for s, _ in ranked]\n        top_buy = order[:CFG['top_n']]\n        keep = set(order[:max(CFG['keep_rank'], CFG['top_n'])])\n\n        # 滞回卖出:已持仓跌出前 keep_rank 名才卖(不是跌出 top_n 就卖)\n        for s in list(context.hold):\n            if s not in keep:\n                pos = acc.positions.get(s)\n                if pos and pos.sellable > 0:\n                    order_shares('8888', s, -pos.sellable, style=MarketOrderStyle)\n                    context.hold.discard(s)\n                    context.max_price.pop(s, None)\n                    SRLogger.info('卖出 %s (跌出前%d名)' % (s, CFG['keep_rank']))\n\n        # 买入:只补空出的仓位;pyramid=False 时跳过已持仓\n        targets = [s for s in top_buy if CFG['pyramid'] or s not in context.hold]\n        room = max(CFG['top_n'] - (0 if CFG['pyramid'] else len(context.hold)), 0)\n        targets = targets[:room] if not CFG['pyramid'] else targets\n        if targets:\n            budget_per = acc.total_value * 0.95 / CFG['top_n']\n            for s in targets:\n                if s not in last:\n                    continue\n                qty = int(budget_per / last[s] / 100) * 100\n                if qty >= 100 and acc.cash >= qty * last[s]:\n                    order_shares('8888', s, qty, style=MarketOrderStyle)\n                    context.hold.add(s)\n                    context.max_price[s] = last[s]\n                    SRLogger.info('买入 %s %d股 (按昨收%.3f定量)' % (s, qty, last[s]))\n                else:\n                    SRLogger.info('想买 %s 但资金不足或不足100股' % s)\n\n    # ===== 收盘入库:今天的收盘价此刻才可见于下个交易日 =====\n    for s in context.universe:\n        try:\n            b = bar[s]\n            if b is None or getattr(b, 'close', None) in (None, 0):\n                continue\n            context.hist[s].append(b.close)\n            if len(context.hist[s]) > 250:\n                context.hist[s] = context.hist[s][-250:]\n        except Exception as e:\n            SRLogger.info('数据异常 %s: %s' % (s, e))\n            continue\n",
+          "初始资金": 1000000,
+          "基准指数": "沪深300",
+          "佣金率": 1,
+          "回测频率": "1d",
+          "回测开始时间": "20220101",
+          "回测结束时间": "20260630"
+        }
+      },
+      {
+        "id": 6,
+        "type": "BackTestResultControl",
+        "title": "回测结果(点开看图)",
+        "pos": [
+          560,
+          840
+        ],
+        "size": [
+          320,
+          140
+        ],
+        "flags": {
+          "uuid": "f07a40f6-bb40-4acb-aec7-26e83d9d38cf"
+        },
+        "order": 7,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "回测任务",
+            "type": 0,
+            "link": 5,
+            "fieldName": "task_id",
+            "hide": false
+          }
+        ],
+        "outputs": [
+          {
+            "name": "图表绘制",
+            "type": 0,
+            "links": [],
+            "fieldName": "task_id",
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "回测任务": "error"
+        }
+      },
+      {
+        "id": 7,
+        "type": "StockBacktestControl",
+        "title": "C缓冲+滞回 全区间",
+        "pos": [
+          80,
+          1240
+        ],
+        "size": [
+          420,
+          340
+        ],
+        "flags": {
+          "uuid": "e9ec973d-5113-4974-a9cc-e88a50a09c24"
+        },
+        "order": 3,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "策略代码",
+            "type": 0,
+            "link": null,
+            "fieldName": "code",
+            "hide": false
+          },
+          {
+            "name": "因子值",
+            "type": 0,
+            "link": null,
+            "fieldName": "factors",
+            "hide": false
+          },
+          {
+            "name": "初始资金",
+            "type": 0,
+            "link": null,
+            "fieldName": "start_capital",
+            "hide": true
+          },
+          {
+            "name": "基准指数",
+            "type": 0,
+            "link": null,
+            "fieldName": "standard_symbol",
+            "hide": false
+          },
+          {
+            "name": "佣金率",
+            "type": 0,
+            "link": null,
+            "fieldName": "commission_rate",
+            "hide": true
+          },
+          {
+            "name": "回测频率",
+            "type": 0,
+            "link": null,
+            "fieldName": "frequency",
+            "hide": true
+          },
+          {
+            "name": "回测开始时间",
+            "type": 0,
+            "link": null,
+            "fieldName": "start_date",
+            "hide": true
+          },
+          {
+            "name": "回测结束时间",
+            "type": 0,
+            "link": null,
+            "fieldName": "end_date",
+            "hide": true
+          }
+        ],
+        "outputs": [
+          {
+            "name": "回测id",
+            "type": 0,
+            "links": [
+              7,
+              8
+            ],
+            "fieldName": "backtest_id",
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "策略代码": "# -*- coding: utf-8 -*-\n# 无前视动量轮动·参数化模板 —— v2_clean 崩盘(全区间-49%DD)后的防抖动改造底座。\n# 诊断:信号晚一天(实盘现实)时,高换手的\"追高杀跌\"磨损吃掉全部利润;\n# 对策全在 CFG 里,各变体只改 CFG,由 flows/a3-anti-whipsaw-flow.json 对比:\n#   exit_buffer  卖出缓冲:昨收 < MA(exit_ma)×(1-buffer) 才卖(防贴线抖动)\n#   trail        高点回撤止损阈值\n#   keep_rank    排名滞回:已持仓跌出前 keep_rank 名才调仓卖出(买入仍只买前 top_n)\n#   biweekly     True=隔周调仓(ISO周号偶数),换手减半\n#   pyramid      True=调仓日对已持仓的领先者继续加码(v1旧行为)\n# 决策只用截至昨收的 context.hist,当日收盘在 handle_data 末尾才入库 —— 无前视。\nfrom panda_backtest.api.api import *\nfrom panda_backtest.api.stock_api import *\nimport numpy as np\nimport pandas as pd\nimport datetime\n\nCFG = {'exit_ma': 20, 'exit_buffer': 0.02, 'trail': 0.10,\n       'mom_days': 20, 'ma_filter': 60, 'top_n': 3, 'keep_rank': 5,\n       'biweekly': False, 'pyramid': False}\n\ndef initialize(context):\n    context.universe = ['562500.SH', '159770.SZ', '512760.SH', '588000.SH', '159819.SZ', '588170.SH', '515070.SH', '513050.SH', '510300.SH', '518880.SH']\n    context.hist = {s: [] for s in context.universe}\n    context.hold = set()\n    context.max_price = {}\n    context.buy_day = 0  # 周一:用上周五收盘信号,周一开盘成交(对齐实盘)\n\ndef _rank(context, last):\n    \"\"\"按动量排序的候选表 [(sym, momentum), ...],只含通过过滤的。\"\"\"\n    out = []\n    for s in context.universe:\n        h = context.hist.get(s, [])\n        if s not in last or len(h) < max(CFG['ma_filter'], CFG['mom_days']):\n            continue\n        p0 = h[-CFG['mom_days']]\n        if not p0:\n            continue\n        mom = last[s] / p0 - 1\n        if mom <= 0:\n            continue\n        if last[s] <= sum(h[-CFG['ma_filter']:]) / CFG['ma_filter']:\n            continue\n        out.append((s, mom))\n    out.sort(key=lambda x: x[1], reverse=True)\n    return out\n\ndef handle_data(context, bar):\n    acc = context.stock_account_dict['8888']\n    try:\n        dt = datetime.datetime.strptime(str(context.trade_date), '%Y%m%d')\n        weekday, week_no = dt.weekday(), dt.isocalendar()[1]\n    except:\n        weekday, week_no = -1, 0\n\n    # ===== 决策阶段:只用截至昨收的 hist =====\n    last = {s: context.hist[s][-1] for s in context.universe if context.hist.get(s)}\n\n    # 每日退出:MA 破位带缓冲 + 高点回撤\n    for s in list(context.hold):\n        if s not in last:\n            continue\n        h = context.hist.get(s, [])\n        if len(h) < CFG['exit_ma']:\n            continue\n        px = last[s]\n        ma = sum(h[-CFG['exit_ma']:]) / CFG['exit_ma']\n        sold = False\n        if px < ma * (1 - CFG['exit_buffer']):\n            pos = acc.positions.get(s)\n            if pos and pos.sellable > 0:\n                order_shares('8888', s, -pos.sellable, style=MarketOrderStyle)\n                context.hold.discard(s)\n                context.max_price.pop(s, None)\n                SRLogger.info('卖出 %s (昨收破MA%d带%.0f%%缓冲)' % (s, CFG['exit_ma'], CFG['exit_buffer'] * 100))\n                sold = True\n        if sold:\n            continue\n        mx = context.max_price.get(s, px)\n        if px > mx:\n            context.max_price[s] = px\n        elif mx > 0 and (mx - px) / mx >= CFG['trail']:\n            pos = acc.positions.get(s)\n            if pos and pos.sellable > 0:\n                order_shares('8888', s, -pos.sellable, style=MarketOrderStyle)\n                context.hold.discard(s)\n                context.max_price.pop(s, None)\n                SRLogger.info('卖出 %s (较高点回撤%.0f%%)' % (s, CFG['trail'] * 100))\n\n    # 调仓日:周一(可选隔周)\n    rebal = (weekday == context.buy_day) and (not CFG['biweekly'] or week_no % 2 == 0)\n    if rebal:\n        ranked = _rank(context, last)\n        order = [s for s, _ in ranked]\n        top_buy = order[:CFG['top_n']]\n        keep = set(order[:max(CFG['keep_rank'], CFG['top_n'])])\n\n        # 滞回卖出:已持仓跌出前 keep_rank 名才卖(不是跌出 top_n 就卖)\n        for s in list(context.hold):\n            if s not in keep:\n                pos = acc.positions.get(s)\n                if pos and pos.sellable > 0:\n                    order_shares('8888', s, -pos.sellable, style=MarketOrderStyle)\n                    context.hold.discard(s)\n                    context.max_price.pop(s, None)\n                    SRLogger.info('卖出 %s (跌出前%d名)' % (s, CFG['keep_rank']))\n\n        # 买入:只补空出的仓位;pyramid=False 时跳过已持仓\n        targets = [s for s in top_buy if CFG['pyramid'] or s not in context.hold]\n        room = max(CFG['top_n'] - (0 if CFG['pyramid'] else len(context.hold)), 0)\n        targets = targets[:room] if not CFG['pyramid'] else targets\n        if targets:\n            budget_per = acc.total_value * 0.95 / CFG['top_n']\n            for s in targets:\n                if s not in last:\n                    continue\n                qty = int(budget_per / last[s] / 100) * 100\n                if qty >= 100 and acc.cash >= qty * last[s]:\n                    order_shares('8888', s, qty, style=MarketOrderStyle)\n                    context.hold.add(s)\n                    context.max_price[s] = last[s]\n                    SRLogger.info('买入 %s %d股 (按昨收%.3f定量)' % (s, qty, last[s]))\n                else:\n                    SRLogger.info('想买 %s 但资金不足或不足100股' % s)\n\n    # ===== 收盘入库:今天的收盘价此刻才可见于下个交易日 =====\n    for s in context.universe:\n        try:\n            b = bar[s]\n            if b is None or getattr(b, 'close', None) in (None, 0):\n                continue\n            context.hist[s].append(b.close)\n            if len(context.hist[s]) > 250:\n                context.hist[s] = context.hist[s][-250:]\n        except Exception as e:\n            SRLogger.info('数据异常 %s: %s' % (s, e))\n            continue\n",
+          "初始资金": 1000000,
+          "基准指数": "沪深300",
+          "佣金率": 1,
+          "回测频率": "1d",
+          "回测开始时间": "20220101",
+          "回测结束时间": "20260630"
+        }
+      },
+      {
+        "id": 8,
+        "type": "BackTestResultControl",
+        "title": "回测结果(点开看图)",
+        "pos": [
+          560,
+          1240
+        ],
+        "size": [
+          320,
+          140
+        ],
+        "flags": {
+          "uuid": "173beea6-913c-4e59-b465-30d8432b6ed0"
+        },
+        "order": 8,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "回测任务",
+            "type": 0,
+            "link": 7,
+            "fieldName": "task_id",
+            "hide": false
+          }
+        ],
+        "outputs": [
+          {
+            "name": "图表绘制",
+            "type": 0,
+            "links": [],
+            "fieldName": "task_id",
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "回测任务": "error"
+        }
+      },
+      {
+        "id": 9,
+        "type": "StockBacktestControl",
+        "title": "D缓冲+滞回+隔周调仓 全区间",
+        "pos": [
+          80,
+          1640
+        ],
+        "size": [
+          420,
+          340
+        ],
+        "flags": {
+          "uuid": "769ee5aa-19dd-4b7e-a2a2-8cc23fd05cb8"
+        },
+        "order": 4,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "策略代码",
+            "type": 0,
+            "link": null,
+            "fieldName": "code",
+            "hide": false
+          },
+          {
+            "name": "因子值",
+            "type": 0,
+            "link": null,
+            "fieldName": "factors",
+            "hide": false
+          },
+          {
+            "name": "初始资金",
+            "type": 0,
+            "link": null,
+            "fieldName": "start_capital",
+            "hide": true
+          },
+          {
+            "name": "基准指数",
+            "type": 0,
+            "link": null,
+            "fieldName": "standard_symbol",
+            "hide": false
+          },
+          {
+            "name": "佣金率",
+            "type": 0,
+            "link": null,
+            "fieldName": "commission_rate",
+            "hide": true
+          },
+          {
+            "name": "回测频率",
+            "type": 0,
+            "link": null,
+            "fieldName": "frequency",
+            "hide": true
+          },
+          {
+            "name": "回测开始时间",
+            "type": 0,
+            "link": null,
+            "fieldName": "start_date",
+            "hide": true
+          },
+          {
+            "name": "回测结束时间",
+            "type": 0,
+            "link": null,
+            "fieldName": "end_date",
+            "hide": true
+          }
+        ],
+        "outputs": [
+          {
+            "name": "回测id",
+            "type": 0,
+            "links": [
+              9,
+              10
+            ],
+            "fieldName": "backtest_id",
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "策略代码": "# -*- coding: utf-8 -*-\n# 无前视动量轮动·参数化模板 —— v2_clean 崩盘(全区间-49%DD)后的防抖动改造底座。\n# 诊断:信号晚一天(实盘现实)时,高换手的\"追高杀跌\"磨损吃掉全部利润;\n# 对策全在 CFG 里,各变体只改 CFG,由 flows/a3-anti-whipsaw-flow.json 对比:\n#   exit_buffer  卖出缓冲:昨收 < MA(exit_ma)×(1-buffer) 才卖(防贴线抖动)\n#   trail        高点回撤止损阈值\n#   keep_rank    排名滞回:已持仓跌出前 keep_rank 名才调仓卖出(买入仍只买前 top_n)\n#   biweekly     True=隔周调仓(ISO周号偶数),换手减半\n#   pyramid      True=调仓日对已持仓的领先者继续加码(v1旧行为)\n# 决策只用截至昨收的 context.hist,当日收盘在 handle_data 末尾才入库 —— 无前视。\nfrom panda_backtest.api.api import *\nfrom panda_backtest.api.stock_api import *\nimport numpy as np\nimport pandas as pd\nimport datetime\n\nCFG = {'exit_ma': 20, 'exit_buffer': 0.02, 'trail': 0.10,\n       'mom_days': 20, 'ma_filter': 60, 'top_n': 3, 'keep_rank': 5,\n       'biweekly': True, 'pyramid': False}\n\ndef initialize(context):\n    context.universe = ['562500.SH', '159770.SZ', '512760.SH', '588000.SH', '159819.SZ', '588170.SH', '515070.SH', '513050.SH', '510300.SH', '518880.SH']\n    context.hist = {s: [] for s in context.universe}\n    context.hold = set()\n    context.max_price = {}\n    context.buy_day = 0  # 周一:用上周五收盘信号,周一开盘成交(对齐实盘)\n\ndef _rank(context, last):\n    \"\"\"按动量排序的候选表 [(sym, momentum), ...],只含通过过滤的。\"\"\"\n    out = []\n    for s in context.universe:\n        h = context.hist.get(s, [])\n        if s not in last or len(h) < max(CFG['ma_filter'], CFG['mom_days']):\n            continue\n        p0 = h[-CFG['mom_days']]\n        if not p0:\n            continue\n        mom = last[s] / p0 - 1\n        if mom <= 0:\n            continue\n        if last[s] <= sum(h[-CFG['ma_filter']:]) / CFG['ma_filter']:\n            continue\n        out.append((s, mom))\n    out.sort(key=lambda x: x[1], reverse=True)\n    return out\n\ndef handle_data(context, bar):\n    acc = context.stock_account_dict['8888']\n    try:\n        dt = datetime.datetime.strptime(str(context.trade_date), '%Y%m%d')\n        weekday, week_no = dt.weekday(), dt.isocalendar()[1]\n    except:\n        weekday, week_no = -1, 0\n\n    # ===== 决策阶段:只用截至昨收的 hist =====\n    last = {s: context.hist[s][-1] for s in context.universe if context.hist.get(s)}\n\n    # 每日退出:MA 破位带缓冲 + 高点回撤\n    for s in list(context.hold):\n        if s not in last:\n            continue\n        h = context.hist.get(s, [])\n        if len(h) < CFG['exit_ma']:\n            continue\n        px = last[s]\n        ma = sum(h[-CFG['exit_ma']:]) / CFG['exit_ma']\n        sold = False\n        if px < ma * (1 - CFG['exit_buffer']):\n            pos = acc.positions.get(s)\n            if pos and pos.sellable > 0:\n                order_shares('8888', s, -pos.sellable, style=MarketOrderStyle)\n                context.hold.discard(s)\n                context.max_price.pop(s, None)\n                SRLogger.info('卖出 %s (昨收破MA%d带%.0f%%缓冲)' % (s, CFG['exit_ma'], CFG['exit_buffer'] * 100))\n                sold = True\n        if sold:\n            continue\n        mx = context.max_price.get(s, px)\n        if px > mx:\n            context.max_price[s] = px\n        elif mx > 0 and (mx - px) / mx >= CFG['trail']:\n            pos = acc.positions.get(s)\n            if pos and pos.sellable > 0:\n                order_shares('8888', s, -pos.sellable, style=MarketOrderStyle)\n                context.hold.discard(s)\n                context.max_price.pop(s, None)\n                SRLogger.info('卖出 %s (较高点回撤%.0f%%)' % (s, CFG['trail'] * 100))\n\n    # 调仓日:周一(可选隔周)\n    rebal = (weekday == context.buy_day) and (not CFG['biweekly'] or week_no % 2 == 0)\n    if rebal:\n        ranked = _rank(context, last)\n        order = [s for s, _ in ranked]\n        top_buy = order[:CFG['top_n']]\n        keep = set(order[:max(CFG['keep_rank'], CFG['top_n'])])\n\n        # 滞回卖出:已持仓跌出前 keep_rank 名才卖(不是跌出 top_n 就卖)\n        for s in list(context.hold):\n            if s not in keep:\n                pos = acc.positions.get(s)\n                if pos and pos.sellable > 0:\n                    order_shares('8888', s, -pos.sellable, style=MarketOrderStyle)\n                    context.hold.discard(s)\n                    context.max_price.pop(s, None)\n                    SRLogger.info('卖出 %s (跌出前%d名)' % (s, CFG['keep_rank']))\n\n        # 买入:只补空出的仓位;pyramid=False 时跳过已持仓\n        targets = [s for s in top_buy if CFG['pyramid'] or s not in context.hold]\n        room = max(CFG['top_n'] - (0 if CFG['pyramid'] else len(context.hold)), 0)\n        targets = targets[:room] if not CFG['pyramid'] else targets\n        if targets:\n            budget_per = acc.total_value * 0.95 / CFG['top_n']\n            for s in targets:\n                if s not in last:\n                    continue\n                qty = int(budget_per / last[s] / 100) * 100\n                if qty >= 100 and acc.cash >= qty * last[s]:\n                    order_shares('8888', s, qty, style=MarketOrderStyle)\n                    context.hold.add(s)\n                    context.max_price[s] = last[s]\n                    SRLogger.info('买入 %s %d股 (按昨收%.3f定量)' % (s, qty, last[s]))\n                else:\n                    SRLogger.info('想买 %s 但资金不足或不足100股' % s)\n\n    # ===== 收盘入库:今天的收盘价此刻才可见于下个交易日 =====\n    for s in context.universe:\n        try:\n            b = bar[s]\n            if b is None or getattr(b, 'close', None) in (None, 0):\n                continue\n            context.hist[s].append(b.close)\n            if len(context.hist[s]) > 250:\n                context.hist[s] = context.hist[s][-250:]\n        except Exception as e:\n            SRLogger.info('数据异常 %s: %s' % (s, e))\n            continue\n",
+          "初始资金": 1000000,
+          "基准指数": "沪深300",
+          "佣金率": 1,
+          "回测频率": "1d",
+          "回测开始时间": "20220101",
+          "回测结束时间": "20260630"
+        }
+      },
+      {
+        "id": 10,
+        "type": "BackTestResultControl",
+        "title": "回测结果(点开看图)",
+        "pos": [
+          560,
+          1640
+        ],
+        "size": [
+          320,
+          140
+        ],
+        "flags": {
+          "uuid": "59d6bb7b-1281-450c-9690-b1854581bb00"
+        },
+        "order": 9,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "回测任务",
+            "type": 0,
+            "link": 9,
+            "fieldName": "task_id",
+            "hide": false
+          }
+        ],
+        "outputs": [
+          {
+            "name": "图表绘制",
+            "type": 0,
+            "links": [],
+            "fieldName": "task_id",
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "回测任务": "error"
+        }
+      },
+      {
+        "id": 11,
+        "type": "BacktestSummaryNode",
+        "title": "回测汇总表(自动)",
+        "pos": [
+          1000,
+          1900
+        ],
+        "size": [
+          380,
+          280
+        ],
+        "flags": {
+          "uuid": "b44623b0-6940-4930-a99a-a32f4080c270"
+        },
+        "order": 10,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "标签(逗号分隔)",
+            "type": 0,
+            "link": null,
+            "fieldName": "labels",
+            "hide": false
+          },
+          {
+            "name": "回测ID1",
+            "type": 0,
+            "link": 2,
+            "fieldName": "back_id_1",
+            "hide": false
+          },
+          {
+            "name": "回测ID2",
+            "type": 0,
+            "link": 4,
+            "fieldName": "back_id_2",
+            "hide": false
+          },
+          {
+            "name": "回测ID3",
+            "type": 0,
+            "link": 6,
+            "fieldName": "back_id_3",
+            "hide": false
+          },
+          {
+            "name": "回测ID4",
+            "type": 0,
+            "link": 8,
+            "fieldName": "back_id_4",
+            "hide": false
+          },
+          {
+            "name": "回测ID5",
+            "type": 0,
+            "link": 10,
+            "fieldName": "back_id_5",
+            "hide": false
+          },
+          {
+            "name": "回测ID6",
+            "type": 0,
+            "link": null,
+            "fieldName": "back_id_6",
+            "hide": false
+          }
+        ],
+        "outputs": [
+          {
+            "name": "对比表(Markdown)",
+            "type": 0,
+            "links": [],
+            "fieldName": "summary_md",
+            "slot_index": 0
+          },
+          {
+            "name": "对比数据(JSON)",
+            "type": 0,
+            "links": [],
+            "fieldName": "summary_json",
+            "slot_index": 1
+          }
+        ],
+        "properties": {
+          "标签(逗号分隔)": "基线v2(加码,无防抖),A缓冲退出(MA20-2%,回撤10%),B排名滞回(跌出前5才卖),C缓冲+滞回,D缓冲+滞回+隔周调仓",
+          "回测ID1": "",
+          "回测ID2": "",
+          "回测ID3": "",
+          "回测ID4": "",
+          "回测ID5": "",
+          "回测ID6": ""
+        }
+      }
+    ],
+    "links": [
+      [
+        1,
+        1,
+        0,
+        2,
+        0,
+        0
+      ],
+      [
+        2,
+        1,
+        0,
+        11,
+        1,
+        0
+      ],
+      [
+        3,
+        3,
+        0,
+        4,
+        0,
+        0
+      ],
+      [
+        4,
+        3,
+        0,
+        11,
+        2,
+        0
+      ],
+      [
+        5,
+        5,
+        0,
+        6,
+        0,
+        0
+      ],
+      [
+        6,
+        5,
+        0,
+        11,
+        3,
+        0
+      ],
+      [
+        7,
+        7,
+        0,
+        8,
+        0,
+        0
+      ],
+      [
+        8,
+        7,
+        0,
+        11,
+        4,
+        0
+      ],
+      [
+        9,
+        9,
+        0,
+        10,
+        0,
+        0
+      ],
+      [
+        10,
+        9,
+        0,
+        11,
+        5,
+        0
+      ]
+    ],
+    "groups": [
+      {
+        "title": "🧊 冻结代码验证 —— 无任何LLM,固定代码分段复跑;先看v1全区间能否复现319%/1.78",
+        "bounding": [
+          40,
+          0,
+          920,
+          1800
+        ],
+        "color": "#3f5f8f"
+      },
+      {
+        "title": "📊 汇总表(HTML报告也会自动落到 docker/reports/)",
+        "bounding": [
+          960,
+          640,
+          460,
+          400
+        ],
+        "color": "#7f5fa0"
+      }
+    ],
+    "config": {},
+    "extra": {},
+    "version": 0.4
+  }
+}
