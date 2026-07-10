@@ -54,7 +54,8 @@ services:
       # Docker Desktop(Win/Mac) 用 host.docker.internal 指宿主机，如 http://host.docker.internal:7890
       HTTP_PROXY: "${DOCKER_PROXY:-}"
       HTTPS_PROXY: "${DOCKER_PROXY:-}"
-      NO_PROXY: "mongo,localhost,127.0.0.1,api.deepseek.com"   # 容器内网/国内可直连的不走代理
+      # 容器内网/国内可直连的不走代理(东财/新浪是看板资讯页数据源,走代理会 SSL EOF)
+      NO_PROXY: "mongo,localhost,127.0.0.1,api.deepseek.com,.eastmoney.com,.sina.com.cn,.sinajs.cn"
     ports:
       - "127.0.0.1:8000:8000"    # 只绑本机，外部访问不到
     volumes:
@@ -83,6 +84,7 @@ services:
       WATCHLIST: "${WATCHLIST:-}"        # 也可用环境变量覆盖 watchlist.txt
       WATCHLIST_FILE: "${WATCHLIST_FILE:-/data/watchlist.txt}"  # 换 ETF 名单:/data/watchlist-etf.txt
       ASSET_TYPE: "${ASSET_TYPE:-stock}"  # etf=用 ETF 数据源(参赛用)
+      ETF20: "${ETF20:-}"                 # 20%涨跌幅的非588 ETF名单(如创业板ETF 159915),逗号分隔
       # loader 只访问国内行情源(东财/新浪/上交所)和容器内 mongo，全部直连：
       # 显式置空，防止 Docker Desktop 把宿主机代理注入进来导致 SSL EOF。
       HTTP_PROXY: ""
