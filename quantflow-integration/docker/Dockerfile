@@ -38,6 +38,8 @@ COPY docker/patched_quantflow/mongodb_handler.py /app/panda_quantflow/src/common
 # 股票回测节点：平台原代码 except 里用 e.message(不存在)把真实错误吞成
 # AttributeError；换成打印真实异常+traceback 尾部，方便排错。
 COPY docker/patched_quantflow/backtest_stock_node.py /app/panda_quantflow/src/panda_plugins/internal/backtest_stock_node.py
+# 下单撮合取价:标的停牌/数据缺口时原代码 bar.None.open 崩溃;改成返回0→干净拒单。
+COPY docker/patched_quantflow/order_quotation_verify.py /app/panda_quantflow/src/panda_backtest/backtest_common/order/common/order_quotation_verify.py
 # 回测区间上限:原平台硬编码 3 年(SaaS 省算力,非技术必需);本地放宽为可配(默认12年)。
 COPY docker/patched_quantflow/run_workflow_utils.py /app/panda_quantflow/src/panda_server/utils/run_workflow_utils.py
 
