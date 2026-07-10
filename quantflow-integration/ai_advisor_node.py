@@ -66,9 +66,13 @@ def read_backtest(back_id: str, log=None) -> dict:
 # 目的：堵死 LLM 发明不存在函数(如 stock_api_daily)与不防停牌两类高频错误。
 HARD_RULES = """
 【硬性约束 —— 违反任何一条要么报错、要么静默 0 成交，逐条自查后再输出】
-1. 头两行必须原样出现：
+1. 开头的 import 必须完整。可用 numpy/pandas/datetime，但【用什么就必须 import 什么】——
+   常见事故：用了 np. 却没 import numpy → NameError 崩溃。固定用下面这组开头，不要省：
    from panda_backtest.api.api import *
    from panda_backtest.api.stock_api import *
+   import numpy as np
+   import pandas as pd
+   import datetime
 
 2. 【关键】历史数据一律在 context 里自建缓存，禁止用 stock_api_quotation 取历史。
    原因：该接口 period 必须精确等于 '1d'、fields 不含 'symbol' 时返回表没有 symbol 列、
@@ -101,6 +105,8 @@ HARD_RULES = """
 ```python
 from panda_backtest.api.api import *
 from panda_backtest.api.stock_api import *
+import numpy as np
+import pandas as pd
 import datetime
 
 def initialize(context):
@@ -153,6 +159,18 @@ def handle_data(context, bar):
 ```
 这个骨架能真实成交。你的任务是把里面的信号逻辑换成用户要的策略，数据缓存/下单/日志结构保持不变。
 """
+
+
+def _log_code(log, code: str, tag: str = "生成的策略代码"):
+    """把策略代码分块打进运行日志(UI 看不到节点输出时,可从日志复制)。"""
+    if not code:
+        log(f"⚠ {tag}为空(LLM 未产出代码)")
+        return
+    lines = code.splitlines()
+    log(f"===== {tag}({len(lines)} 行,可从下方复制)=====")
+    for i in range(0, len(lines), 25):
+        log("\n".join(lines[i:i + 25]))
+    log("===== 代码结束 =====")
 
 
 def system_prompt() -> str:
@@ -342,6 +360,7 @@ class AIAdvisorNode(BaseWorkNode):
             expl += f"\n\n⚠ 代码检查提示（请人工确认后再回测）：{warn}"
 
         self.log_info(f"AI策略顾问 完成，引擎={engine}")
+        _log_code(self.log_info, code)   # 把生成的策略代码打进运行日志,方便查看/复制
         return AIAdvisorOutput(analysis=result.get("analysis", ""),
                                strategy_code=code, explanation=expl, engine=engine)
 

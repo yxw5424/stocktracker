@@ -206,6 +206,11 @@ class AIStrategyLoopNode(BaseWorkNode):
                    f"{input.target_metric}={out['best_metrics'].get(input.target_metric)}。"
                    "最优代码已在 best_code，可连回「股票回测」复跑确认。")
         self.log_info(summary)
+        try:
+            from ai_advisor_node import _log_code
+            _log_code(self.log_info, out["best_code"], tag="最优策略代码(best_code)")
+        except Exception:
+            pass
         return LoopOutput(
             best_code=out["best_code"], best_round=out["best_round"],
             best_metrics=json.dumps(out["best_metrics"], ensure_ascii=False),
