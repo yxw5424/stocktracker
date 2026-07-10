@@ -1,0 +1,436 @@
+{
+  "format_version": "1.0",
+  "name": "尾盘执行验证(收盘撮合,先设MATCHING_TYPE=0)",
+  "description": "⚠ 前置条件:.env 里 MATCHING_TYPE=0 并 docker compose up -d quantflow 后再跑,否则撮合仍是开盘价、结果就是前视污染的旧v1数字,读了会误导!建议同时设 BACKTEST_SLIPPAGE=0.001(每边0.1%)模拟真实点差。本流程回答:不预测收盘、把执行挪到当天14:45尾盘(信号价≈成交价),策略还剩多少真边际。残余误差(尾盘15分钟信号翻转/实际成交漂移)见 BACKTEST-AUDIT.md 对应表,由实盘对账逐笔量化。跑完记得把两个环境变量改回默认。",
+  "litegraph": {
+    "last_node_id": 5,
+    "last_link_id": 4,
+    "nodes": [
+      {
+        "id": 1,
+        "type": "StockBacktestControl",
+        "title": "尾盘执行 全区间【须MATCHING_TYPE=0】",
+        "pos": [
+          80,
+          40
+        ],
+        "size": [
+          420,
+          340
+        ],
+        "flags": {
+          "uuid": "46419a60-88c4-4b88-9ecb-f182553ee2e8"
+        },
+        "order": 0,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "策略代码",
+            "type": 0,
+            "link": null,
+            "fieldName": "code",
+            "hide": false
+          },
+          {
+            "name": "因子值",
+            "type": 0,
+            "link": null,
+            "fieldName": "factors",
+            "hide": false
+          },
+          {
+            "name": "初始资金",
+            "type": 0,
+            "link": null,
+            "fieldName": "start_capital",
+            "hide": true
+          },
+          {
+            "name": "基准指数",
+            "type": 0,
+            "link": null,
+            "fieldName": "standard_symbol",
+            "hide": false
+          },
+          {
+            "name": "佣金率",
+            "type": 0,
+            "link": null,
+            "fieldName": "commission_rate",
+            "hide": true
+          },
+          {
+            "name": "回测频率",
+            "type": 0,
+            "link": null,
+            "fieldName": "frequency",
+            "hide": true
+          },
+          {
+            "name": "回测开始时间",
+            "type": 0,
+            "link": null,
+            "fieldName": "start_date",
+            "hide": true
+          },
+          {
+            "name": "回测结束时间",
+            "type": 0,
+            "link": null,
+            "fieldName": "end_date",
+            "hide": true
+          }
+        ],
+        "outputs": [
+          {
+            "name": "回测id",
+            "type": 0,
+            "links": [
+              1,
+              2
+            ],
+            "fieldName": "backtest_id",
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "策略代码": "# -*- coding: utf-8 -*-\n# A3「慢进快出」动量轮动 —— 冻结版 v1(2026-07-10 由 DeepSeek 生成,回测:\n# 2022/01-2026/06 总收益319.8%、年化39.2%、夏普1.781、最大回撤-13.7%、113笔)。\n# ⚠ 已知行为:周五调仓时不跳过已持仓标的,动量领先者会被反复加码,\n#   单票可堆到约60%仓位(激进)。等权修正版见 v1_1。\nfrom panda_backtest.api.api import *\nfrom panda_backtest.api.stock_api import *\nimport numpy as np\nimport pandas as pd\nimport datetime\n\ndef initialize(context):\n    context.universe = ['562500.SH', '159770.SZ', '512760.SH', '588000.SH', '159819.SZ', '588170.SH', '515070.SH', '513050.SH', '510300.SH', '518880.SH']\n    context.hist = {s: [] for s in context.universe}\n    context.hold = set()\n    context.max_price = {}  # 记录持仓期间最高价\n    context.buy_day = 4  # 周五=4\n\ndef handle_data(context, bar):\n    acc = context.stock_account_dict['8888']\n    today = context.trade_date\n    # 获取当前日期星期几\n    try:\n        dt = datetime.datetime.strptime(str(today), '%Y%m%d')\n        weekday = dt.weekday()\n    except:\n        weekday = -1\n\n    prices = {}\n    for s in context.universe:\n        try:\n            b = bar[s]\n            if b is None or getattr(b, 'close', None) in (None, 0):\n                continue\n            prices[s] = b.close\n            context.hist[s].append(b.close)\n            if len(context.hist[s]) > 250:\n                context.hist[s] = context.hist[s][-250:]\n        except Exception as e:\n            SRLogger.info('数据异常 %s: %s' % (s, e))\n            continue\n\n    # 每日卖出检查\n    for s in list(context.hold):\n        if s not in prices:\n            continue\n        h = context.hist.get(s, [])\n        if len(h) < 20:\n            continue\n        ma20 = sum(h[-20:]) / 20\n        current_price = prices[s]\n        # 跌破20日均线\n        if current_price < ma20:\n            pos = acc.positions.get(s)\n            if pos and pos.sellable > 0:\n                order_shares('8888', s, -pos.sellable, style=MarketOrderStyle)\n                context.hold.discard(s)\n                context.max_price.pop(s, None)\n                SRLogger.info('卖出 %s (跌破20日线) @ %.3f' % (s, current_price))\n            continue\n        # 回撤8%\n        max_p = context.max_price.get(s, current_price)\n        if current_price > max_p:\n            context.max_price[s] = current_price\n        elif max_p > 0 and (max_p - current_price) / max_p >= 0.08:\n            pos = acc.positions.get(s)\n            if pos and pos.sellable > 0:\n                order_shares('8888', s, -pos.sellable, style=MarketOrderStyle)\n                context.hold.discard(s)\n                context.max_price.pop(s, None)\n                SRLogger.info('卖出 %s (回撤8%%) @ %.3f' % (s, current_price))\n\n    # 每周五买入决策\n    if weekday != context.buy_day:\n        return\n\n    # 计算动量与均线\n    candidates = []\n    for s in context.universe:\n        if s not in prices:\n            continue\n        h = context.hist.get(s, [])\n        if len(h) < 60:\n            continue\n        # 20日动量 = 当前价 / 20日前价 - 1\n        price_20d_ago = h[-20] if len(h) >= 20 else None\n        if price_20d_ago is None or price_20d_ago == 0:\n            continue\n        momentum = prices[s] / price_20d_ago - 1\n        if momentum <= 0:\n            continue\n        # 60日均线\n        ma60 = sum(h[-60:]) / 60\n        if prices[s] <= ma60:\n            continue\n        candidates.append((s, momentum))\n\n    # 选前3名\n    candidates.sort(key=lambda x: x[1], reverse=True)\n    top3 = [c[0] for c in candidates[:3]]\n\n    # 卖出不在top3的持仓（释放资金）\n    for s in list(context.hold):\n        if s not in top3:\n            pos = acc.positions.get(s)\n            if pos and pos.sellable > 0:\n                order_shares('8888', s, -pos.sellable, style=MarketOrderStyle)\n                context.hold.discard(s)\n                context.max_price.pop(s, None)\n                SRLogger.info('卖出 %s (调仓) @ %.3f' % (s, prices.get(s, 0)))\n\n    # 买入top3，等权\n    if not top3:\n        return\n    budget_per = acc.total_value * 0.95 / len(top3)  # 留5%现金\n    for s in top3:\n        if s not in prices:\n            continue\n        qty = int(budget_per / prices[s] / 100) * 100\n        if qty >= 100 and acc.cash >= qty * prices[s]:\n            order_shares('8888', s, qty, style=MarketOrderStyle)\n            context.hold.add(s)\n            context.max_price[s] = prices[s]\n            SRLogger.info('买入 %s %d股 @ %.3f' % (s, qty, prices[s]))\n        else:\n            SRLogger.info('想买 %s 但资金不足或不足100股' % s)\n",
+          "初始资金": 1000000,
+          "基准指数": "沪深300",
+          "佣金率": 1,
+          "回测频率": "1d",
+          "回测开始时间": "20220101",
+          "回测结束时间": "20260630"
+        }
+      },
+      {
+        "id": 2,
+        "type": "BackTestResultControl",
+        "title": "回测结果(点开看图)",
+        "pos": [
+          560,
+          40
+        ],
+        "size": [
+          320,
+          140
+        ],
+        "flags": {
+          "uuid": "75ea5cdb-0e27-4cf4-862f-3cc47fea9739"
+        },
+        "order": 2,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "回测任务",
+            "type": 0,
+            "link": 1,
+            "fieldName": "task_id",
+            "hide": false
+          }
+        ],
+        "outputs": [
+          {
+            "name": "图表绘制",
+            "type": 0,
+            "links": [],
+            "fieldName": "task_id",
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "回测任务": "error"
+        }
+      },
+      {
+        "id": 3,
+        "type": "StockBacktestControl",
+        "title": "尾盘执行 2026H1【须MATCHING_TYPE=0】",
+        "pos": [
+          80,
+          440
+        ],
+        "size": [
+          420,
+          340
+        ],
+        "flags": {
+          "uuid": "b02375de-f685-4450-9bab-372a66621f81"
+        },
+        "order": 1,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "策略代码",
+            "type": 0,
+            "link": null,
+            "fieldName": "code",
+            "hide": false
+          },
+          {
+            "name": "因子值",
+            "type": 0,
+            "link": null,
+            "fieldName": "factors",
+            "hide": false
+          },
+          {
+            "name": "初始资金",
+            "type": 0,
+            "link": null,
+            "fieldName": "start_capital",
+            "hide": true
+          },
+          {
+            "name": "基准指数",
+            "type": 0,
+            "link": null,
+            "fieldName": "standard_symbol",
+            "hide": false
+          },
+          {
+            "name": "佣金率",
+            "type": 0,
+            "link": null,
+            "fieldName": "commission_rate",
+            "hide": true
+          },
+          {
+            "name": "回测频率",
+            "type": 0,
+            "link": null,
+            "fieldName": "frequency",
+            "hide": true
+          },
+          {
+            "name": "回测开始时间",
+            "type": 0,
+            "link": null,
+            "fieldName": "start_date",
+            "hide": true
+          },
+          {
+            "name": "回测结束时间",
+            "type": 0,
+            "link": null,
+            "fieldName": "end_date",
+            "hide": true
+          }
+        ],
+        "outputs": [
+          {
+            "name": "回测id",
+            "type": 0,
+            "links": [
+              3,
+              4
+            ],
+            "fieldName": "backtest_id",
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "策略代码": "# -*- coding: utf-8 -*-\n# A3「慢进快出」动量轮动 —— 冻结版 v1(2026-07-10 由 DeepSeek 生成,回测:\n# 2022/01-2026/06 总收益319.8%、年化39.2%、夏普1.781、最大回撤-13.7%、113笔)。\n# ⚠ 已知行为:周五调仓时不跳过已持仓标的,动量领先者会被反复加码,\n#   单票可堆到约60%仓位(激进)。等权修正版见 v1_1。\nfrom panda_backtest.api.api import *\nfrom panda_backtest.api.stock_api import *\nimport numpy as np\nimport pandas as pd\nimport datetime\n\ndef initialize(context):\n    context.universe = ['562500.SH', '159770.SZ', '512760.SH', '588000.SH', '159819.SZ', '588170.SH', '515070.SH', '513050.SH', '510300.SH', '518880.SH']\n    context.hist = {s: [] for s in context.universe}\n    context.hold = set()\n    context.max_price = {}  # 记录持仓期间最高价\n    context.buy_day = 4  # 周五=4\n\ndef handle_data(context, bar):\n    acc = context.stock_account_dict['8888']\n    today = context.trade_date\n    # 获取当前日期星期几\n    try:\n        dt = datetime.datetime.strptime(str(today), '%Y%m%d')\n        weekday = dt.weekday()\n    except:\n        weekday = -1\n\n    prices = {}\n    for s in context.universe:\n        try:\n            b = bar[s]\n            if b is None or getattr(b, 'close', None) in (None, 0):\n                continue\n            prices[s] = b.close\n            context.hist[s].append(b.close)\n            if len(context.hist[s]) > 250:\n                context.hist[s] = context.hist[s][-250:]\n        except Exception as e:\n            SRLogger.info('数据异常 %s: %s' % (s, e))\n            continue\n\n    # 每日卖出检查\n    for s in list(context.hold):\n        if s not in prices:\n            continue\n        h = context.hist.get(s, [])\n        if len(h) < 20:\n            continue\n        ma20 = sum(h[-20:]) / 20\n        current_price = prices[s]\n        # 跌破20日均线\n        if current_price < ma20:\n            pos = acc.positions.get(s)\n            if pos and pos.sellable > 0:\n                order_shares('8888', s, -pos.sellable, style=MarketOrderStyle)\n                context.hold.discard(s)\n                context.max_price.pop(s, None)\n                SRLogger.info('卖出 %s (跌破20日线) @ %.3f' % (s, current_price))\n            continue\n        # 回撤8%\n        max_p = context.max_price.get(s, current_price)\n        if current_price > max_p:\n            context.max_price[s] = current_price\n        elif max_p > 0 and (max_p - current_price) / max_p >= 0.08:\n            pos = acc.positions.get(s)\n            if pos and pos.sellable > 0:\n                order_shares('8888', s, -pos.sellable, style=MarketOrderStyle)\n                context.hold.discard(s)\n                context.max_price.pop(s, None)\n                SRLogger.info('卖出 %s (回撤8%%) @ %.3f' % (s, current_price))\n\n    # 每周五买入决策\n    if weekday != context.buy_day:\n        return\n\n    # 计算动量与均线\n    candidates = []\n    for s in context.universe:\n        if s not in prices:\n            continue\n        h = context.hist.get(s, [])\n        if len(h) < 60:\n            continue\n        # 20日动量 = 当前价 / 20日前价 - 1\n        price_20d_ago = h[-20] if len(h) >= 20 else None\n        if price_20d_ago is None or price_20d_ago == 0:\n            continue\n        momentum = prices[s] / price_20d_ago - 1\n        if momentum <= 0:\n            continue\n        # 60日均线\n        ma60 = sum(h[-60:]) / 60\n        if prices[s] <= ma60:\n            continue\n        candidates.append((s, momentum))\n\n    # 选前3名\n    candidates.sort(key=lambda x: x[1], reverse=True)\n    top3 = [c[0] for c in candidates[:3]]\n\n    # 卖出不在top3的持仓（释放资金）\n    for s in list(context.hold):\n        if s not in top3:\n            pos = acc.positions.get(s)\n            if pos and pos.sellable > 0:\n                order_shares('8888', s, -pos.sellable, style=MarketOrderStyle)\n                context.hold.discard(s)\n                context.max_price.pop(s, None)\n                SRLogger.info('卖出 %s (调仓) @ %.3f' % (s, prices.get(s, 0)))\n\n    # 买入top3，等权\n    if not top3:\n        return\n    budget_per = acc.total_value * 0.95 / len(top3)  # 留5%现金\n    for s in top3:\n        if s not in prices:\n            continue\n        qty = int(budget_per / prices[s] / 100) * 100\n        if qty >= 100 and acc.cash >= qty * prices[s]:\n            order_shares('8888', s, qty, style=MarketOrderStyle)\n            context.hold.add(s)\n            context.max_price[s] = prices[s]\n            SRLogger.info('买入 %s %d股 @ %.3f' % (s, qty, prices[s]))\n        else:\n            SRLogger.info('想买 %s 但资金不足或不足100股' % s)\n",
+          "初始资金": 1000000,
+          "基准指数": "沪深300",
+          "佣金率": 1,
+          "回测频率": "1d",
+          "回测开始时间": "20260101",
+          "回测结束时间": "20260630"
+        }
+      },
+      {
+        "id": 4,
+        "type": "BackTestResultControl",
+        "title": "回测结果(点开看图)",
+        "pos": [
+          560,
+          440
+        ],
+        "size": [
+          320,
+          140
+        ],
+        "flags": {
+          "uuid": "853ecd5b-e881-40f9-8136-2e86f5f48d30"
+        },
+        "order": 3,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "回测任务",
+            "type": 0,
+            "link": 3,
+            "fieldName": "task_id",
+            "hide": false
+          }
+        ],
+        "outputs": [
+          {
+            "name": "图表绘制",
+            "type": 0,
+            "links": [],
+            "fieldName": "task_id",
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "回测任务": "error"
+        }
+      },
+      {
+        "id": 5,
+        "type": "BacktestSummaryNode",
+        "title": "回测汇总表(自动)",
+        "pos": [
+          1000,
+          700
+        ],
+        "size": [
+          380,
+          280
+        ],
+        "flags": {
+          "uuid": "294c1983-88ac-4d1e-954e-d5b9b480141e"
+        },
+        "order": 4,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "标签(逗号分隔)",
+            "type": 0,
+            "link": null,
+            "fieldName": "labels",
+            "hide": false
+          },
+          {
+            "name": "回测ID1",
+            "type": 0,
+            "link": 2,
+            "fieldName": "back_id_1",
+            "hide": false
+          },
+          {
+            "name": "回测ID2",
+            "type": 0,
+            "link": 4,
+            "fieldName": "back_id_2",
+            "hide": false
+          },
+          {
+            "name": "回测ID3",
+            "type": 0,
+            "link": null,
+            "fieldName": "back_id_3",
+            "hide": false
+          },
+          {
+            "name": "回测ID4",
+            "type": 0,
+            "link": null,
+            "fieldName": "back_id_4",
+            "hide": false
+          },
+          {
+            "name": "回测ID5",
+            "type": 0,
+            "link": null,
+            "fieldName": "back_id_5",
+            "hide": false
+          },
+          {
+            "name": "回测ID6",
+            "type": 0,
+            "link": null,
+            "fieldName": "back_id_6",
+            "hide": false
+          }
+        ],
+        "outputs": [
+          {
+            "name": "对比表(Markdown)",
+            "type": 0,
+            "links": [],
+            "fieldName": "summary_md",
+            "slot_index": 0
+          },
+          {
+            "name": "对比数据(JSON)",
+            "type": 0,
+            "links": [],
+            "fieldName": "summary_json",
+            "slot_index": 1
+          }
+        ],
+        "properties": {
+          "标签(逗号分隔)": "尾盘执行-全区间,尾盘执行-2026H1",
+          "回测ID1": "",
+          "回测ID2": "",
+          "回测ID3": "",
+          "回测ID4": "",
+          "回测ID5": "",
+          "回测ID6": ""
+        }
+      }
+    ],
+    "links": [
+      [
+        1,
+        1,
+        0,
+        2,
+        0,
+        0
+      ],
+      [
+        2,
+        1,
+        0,
+        5,
+        1,
+        0
+      ],
+      [
+        3,
+        3,
+        0,
+        4,
+        0,
+        0
+      ],
+      [
+        4,
+        3,
+        0,
+        5,
+        2,
+        0
+      ]
+    ],
+    "groups": [
+      {
+        "title": "🧊 冻结代码验证 —— 无任何LLM,固定代码分段复跑;先看v1全区间能否复现319%/1.78",
+        "bounding": [
+          40,
+          0,
+          920,
+          1800
+        ],
+        "color": "#3f5f8f"
+      },
+      {
+        "title": "📊 汇总表(HTML报告也会自动落到 docker/reports/)",
+        "bounding": [
+          960,
+          640,
+          460,
+          400
+        ],
+        "color": "#7f5fa0"
+      }
+    ],
+    "config": {},
+    "extra": {},
+    "version": 0.4
+  }
+}

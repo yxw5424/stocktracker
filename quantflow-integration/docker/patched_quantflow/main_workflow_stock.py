@@ -36,7 +36,7 @@ def start(back_test_id:str,code:str,start_date:str,end_date:str, start_capital: 
                       'end_date': end_date,
                       'standard_symbol': standard_symbol_pro,
                       'commission_rate': commission_rate,
-                      'slippage': 0,
+                      'slippage': float(os.getenv('BACKTEST_SLIPPAGE', '0')),  # 每边滑点比例,如0.001=0.1%
                       'frequency': frequency,
                       'matching_type': int(os.getenv('MATCHING_TYPE', '1')),  # 0：bar收盘，1：bar开盘
                       'run_type': 1,
