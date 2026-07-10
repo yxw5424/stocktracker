@@ -146,7 +146,8 @@ HT_APIKEY=ht_你的key
 WATCHLIST_FILE=/data/watchlist-etf.txt     # 比赛只认 ETF,用 ETF 名单(已附 watchlist-etf.txt)
 ASSET_TYPE=etf                             # loader 用 ETF 数据源
 HTSC_LIVE=0                                # 先干跑;要真参赛再改 1
-HTSC_ORDER_LOTS=100                        # 每笔下单股数
+SIGNAL_ENGINE=momentum_v1                  # 信号引擎=冻结版v1动量轮动(回测319.8%/夏普1.78)
+HTSC_BUDGET_PCT=0.31                       # 每笔≈账户总资产31%(等权3只);查不到资产时退固定预算/手数
 ```
 
 **② 灌 ETF 行情:**

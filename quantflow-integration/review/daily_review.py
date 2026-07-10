@@ -44,19 +44,78 @@ except Exception:
     _BROKER = None
 
 
+_ACCT_CACHE = {"total": None, "tried": False}
+
+
+def _find_asset_number(obj):
+    """在余额响应里递归找『总资产』类字段(键名匹配+数值合理)。"""
+    KEYS = ("totalasset", "total_asset", "netasset", "net_asset", "totalvalue",
+            "total_value", "asset", "总资产", "净资产", "总市值")
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            kl = str(k).lower().replace("-", "_")
+            if isinstance(v, (int, float)) and v > 1000 and any(t in kl for t in KEYS):
+                return float(v)
+        for v in obj.values():
+            got = _find_asset_number(v)
+            if got:
+                return got
+    elif isinstance(obj, list):
+        for v in obj:
+            got = _find_asset_number(v)
+            if got:
+                return got
+    return None
+
+
+def _account_total():
+    """查华泰账户总资产(只读,干跑模式也真查);查不到返回 None,只查一次。"""
+    if _ACCT_CACHE["tried"]:
+        return _ACCT_CACHE["total"]
+    _ACCT_CACHE["tried"] = True
+    try:
+        resp = _BROKER.account_balance()
+        _ACCT_CACHE["total"] = _find_asset_number(resp)
+    except Exception:
+        _ACCT_CACHE["total"] = None
+    return _ACCT_CACHE["total"]
+
+
+def _order_qty(price):
+    """下单股数:①按账户总资产比例(HTSC_BUDGET_PCT,默认31%≈等权3只);
+    ②固定金额预算(HTSC_ORDER_BUDGET 元);③兜底固定手数 HTSC_ORDER_LOTS。"""
+    price = float(price)
+    pct = float(os.getenv("HTSC_BUDGET_PCT", "0.31"))
+    if pct > 0 and _BROKER is not None:
+        total = _account_total()
+        if total:
+            qty = int(total * pct / price / 100) * 100
+            if qty >= 100:
+                return qty, f"总资产{total:,.0f}×{pct:.0%}"
+    budget = float(os.getenv("HTSC_ORDER_BUDGET", "0"))
+    if budget > 0:
+        qty = int(budget / price / 100) * 100
+        if qty >= 100:
+            return qty, f"固定预算{budget:,.0f}元"
+    return ORDER_LOTS, "固定手数兜底"
+
+
 def broker_order(side, symbol, price, log_lines):
-    """把决定映射成华泰模拟盘下单;side 含'买'→buy,含'卖'→sell。返回结果字符串。"""
+    """把决定映射成华泰模拟盘下单;side 含'买'→buy,含'卖'→sell。返回结果字符串。
+    买入按账户资产比例定量(等权),卖出全部可卖(由后端按持仓校验)。"""
     if _BROKER is None:
         return ""
     code, ex = split_symbol(symbol)
     direction = "buy" if "买" in side else "sell"
-    r = _BROKER.submit_order(direction, code, ex, ORDER_LOTS,
+    qty, how = _order_qty(price)
+    r = _BROKER.submit_order(direction, code, ex, qty,
                              order_type="limit", price=round(float(price), 3))
     if r.get("dry_run"):
-        return f"  - 🧪 华泰[干跑] 将{('买入' if direction=='buy' else '卖出')} {code}.{ex} {ORDER_LOTS}股 @ {price}"
+        return (f"  - 🧪 华泰[干跑] 将{('买入' if direction=='buy' else '卖出')} "
+                f"{code}.{ex} {qty}股({how}) @ {price}")
     if r.get("ok") is False:
         return f"  - ⚠️ 华泰下单失败:{r.get('error', {}).get('message', r)}"
-    return f"  - 📈 华泰[实盘模拟]已提交 {direction} {code}.{ex} {ORDER_LOTS}股:{json.dumps(r, ensure_ascii=False)[:200]}"
+    return f"  - 📈 华泰[实盘模拟]已提交 {direction} {code}.{ex} {qty}股({how}):{json.dumps(r, ensure_ascii=False)[:200]}"
 
 
 # --------------------------------------------------------------------------- #
@@ -139,6 +198,86 @@ def trend_signals(bars, positions):
             if cross and rising and heavy:
                 signals.append({"symbol": sym, "side": "买入", "price": price,
                                 "rule": "MA20上穿MA60且双线上行,当日放量>1.5倍20日均量"})
+    return signals
+
+
+# --------------------------------------------------------------------------- #
+# ①b 信号引擎:冻结版 v1 动量轮动(strategies/a3_momentum_fast_exit_v1.py 的逐日版)
+#    回测成绩:2022-2026H1 总收益319.8%/夏普1.781;2026H1 +24.0%/夏普2.65。
+#    每日:持仓破20日线 或 较持仓高点回撤8% → 卖出;
+#    周五:20日动量>0 且价>60日线,取前3;跌出前3调仓卖出;前3全部买入
+#         (含已持仓者=v1的"给赢家加码"行为,实盘由资产比例定量近似)。
+# --------------------------------------------------------------------------- #
+SIGNAL_EXCLUDE = set(x.strip().upper() for x in
+                     os.getenv("SIGNAL_EXCLUDE", "511990.SH").split(",") if x.strip())
+
+
+def momentum_v1_signals(bars, positions, trade_date):
+    """bars: {sym: df};positions: {sym: {entry_price, high_since}};trade_date: 'YYYYMMDD'。
+    返回 [{symbol, side, price, rule}]。忠实还原冻结版 v1(见 strategies/ 目录)。"""
+    signals = []
+    universe = [s for s in bars if s not in SIGNAL_EXCLUDE]
+    prices, hists = {}, {}
+    for s in universe:
+        df = bars[s]
+        if df is None or len(df) < 1:
+            continue
+        h = df["close"].astype(float).tolist()[-250:]
+        if not h:
+            continue
+        prices[s], hists[s] = h[-1], h
+
+    # 每日卖出检查(与 v1 相同:先破线,再回撤;回撤基准是账本里的 high_since)
+    for s in list(positions):
+        if s not in prices or len(hists.get(s, [])) < 20:
+            continue
+        price = prices[s]
+        ma20 = sum(hists[s][-20:]) / 20
+        if price < ma20:
+            signals.append({"symbol": s, "side": "卖出", "price": price,
+                            "rule": f"[v1每日风控] 收盘 {price:.3f} 跌破20日线 {ma20:.3f}"})
+            continue
+        high = max(float(positions[s].get("high_since", price)), price)
+        if high > 0 and (high - price) / high >= 0.08:
+            signals.append({"symbol": s, "side": "卖出", "price": price,
+                            "rule": f"[v1每日风控] 较持仓高点 {high:.3f} 回撤≥8%"})
+
+    # 周五调仓(以数据日为准,不看跑脚本的自然日)
+    try:
+        weekday = datetime.datetime.strptime(str(trade_date), "%Y%m%d").weekday()
+    except Exception:
+        weekday = -1
+    if weekday != 4:
+        return signals
+
+    candidates = []
+    for s in universe:
+        h = hists.get(s, [])
+        if s not in prices or len(h) < 60:
+            continue
+        p20 = h[-20]
+        if not p20:
+            continue
+        mom = prices[s] / p20 - 1
+        if mom <= 0:
+            continue
+        if prices[s] <= sum(h[-60:]) / 60:
+            continue
+        candidates.append((s, mom))
+    candidates.sort(key=lambda x: x[1], reverse=True)
+    top3 = [c[0] for c in candidates[:3]]
+
+    sold = {sig["symbol"] for sig in signals if sig["side"] == "卖出"}
+    for s in list(positions):
+        if s not in top3 and s not in sold and s in prices:
+            signals.append({"symbol": s, "side": "卖出", "price": prices[s],
+                            "rule": "[v1周五调仓] 跌出动量前3"})
+    for rank, s in enumerate(top3, 1):
+        if s in sold:
+            continue
+        tag = "加码(v1对领先者的行为)" if s in positions else "新开仓"
+        signals.append({"symbol": s, "side": "买入", "price": prices[s],
+                        "rule": f"[v1周五调仓] 20日动量第{rank}名,{tag}"})
     return signals
 
 
@@ -380,8 +519,12 @@ def main():
     print(f"复核日:{today},自选 {len(watch)} 只,有数据 {len(bars)} 只")
 
     positions = {p["symbol"]: p for p in db[COL_POS].find()}
-    signals = trend_signals(bars, positions)
-    print(f"触发信号 {len(signals)} 条")
+    engine = os.getenv("SIGNAL_ENGINE", "momentum_v1").lower()
+    if engine == "momentum_v1":
+        signals = momentum_v1_signals(bars, positions, today)
+    else:
+        signals = trend_signals(bars, positions)
+    print(f"信号引擎={engine},触发信号 {len(signals)} 条")
 
     # 更新持仓高点(用于回撤退出)
     for sym, p in positions.items():

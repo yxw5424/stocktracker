@@ -116,7 +116,11 @@ services:
       # HTSC_LIVE=1 才真下单(=正式参赛,不可逆,见 README),默认 0 干跑。
       HT_APIKEY: "${HT_APIKEY:-}"
       HTSC_LIVE: "${HTSC_LIVE:-0}"
-      HTSC_ORDER_LOTS: "${HTSC_ORDER_LOTS:-100}"
+      HTSC_ORDER_LOTS: "${HTSC_ORDER_LOTS:-100}"     # 兜底手数(定量失败时)
+      HTSC_BUDGET_PCT: "${HTSC_BUDGET_PCT:-0.31}"    # 每笔≈账户总资产31%(等权3只)
+      HTSC_ORDER_BUDGET: "${HTSC_ORDER_BUDGET:-0}"   # 或固定金额(元);0=不用
+      SIGNAL_ENGINE: "${SIGNAL_ENGINE:-momentum_v1}" # momentum_v1(冻结版)|trend
+      SIGNAL_EXCLUDE: "${SIGNAL_EXCLUDE:-511990.SH}" # 信号池排除(货币ETF只当停泊)
       WATCHLIST_FILE: "${WATCHLIST_FILE:-/data/watchlist.txt}"  # 参赛用 /data/watchlist-etf.txt
       # 资金流/新闻走东财新浪、决策走 deepseek,全直连(防宿主代理注入)。
       # 华泰在 ai.zhangle.com,也需直连,放行(不走代理)。
