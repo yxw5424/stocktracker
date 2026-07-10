@@ -59,8 +59,13 @@ class HTSCBroker:
     def pending_orders(self):
         return self._post("/api/simSkills/listPendingOrders", {})
 
-    def trade_history(self):
-        return self._post("/api/simSkills/listTradeHistory", {})
+    def trade_history(self, start=None, end=None):
+        """成交记录;后端要求 YYYY-MM-DD 起止日期,默认查最近 7 天。"""
+        import datetime as _dt
+        end = end or _dt.date.today().strftime("%Y-%m-%d")
+        start = start or (_dt.date.today() - _dt.timedelta(days=7)).strftime("%Y-%m-%d")
+        return self._post("/api/simSkills/listTradeHistory",
+                          {"startDate": start, "endDate": end})
 
     # --- 写接口:受 live 开关保护 ---
     def submit_order(self, direction, stock_code, exchange, quantity,
