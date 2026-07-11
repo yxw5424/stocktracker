@@ -155,5 +155,23 @@ services:
       - "./watchlist-smartbeta.txt:/data/watchlist-smartbeta.txt:ro"
       - "./reports:/reports"
 
+  # 数据库备份:docker compose run --rm backup  (产出 docker/backups/panda_日期.gz)
+  # 恢复:docker compose run --rm backup mongorestore --host mongo:27017 --gzip --archive=/backups/文件名
+  backup:
+    profiles: ["backup"]
+    image: mongo:7
+    depends_on:
+      mongo:
+        condition: service_healthy
+    entrypoint:
+      - bash
+      - -c
+      - |
+        f=/backups/panda_$$(date +%Y%m%d_%H%M).gz
+        mongodump --host mongo:27017 --db panda --archive=$$f --gzip && \
+        echo "备份完成:$$f" && ls -lh /backups | tail -5
+    volumes:
+      - "./backups:/backups"
+
 volumes:
   mongo_data:
