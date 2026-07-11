@@ -95,6 +95,8 @@ services:
     volumes:
       - "./watchlist.txt:/data/watchlist.txt:ro"
       - "./watchlist-etf.txt:/data/watchlist-etf.txt:ro"
+      - "./watchlist-etf-broad.txt:/data/watchlist-etf-broad.txt:ro"
+      - "./watchlist-kechuang-semi.txt:/data/watchlist-kechuang-semi.txt:ro"
 
   # AI 信号复核官:收盘后跑一次 → 信号+复核+纸面执行+复盘报告(reports/ 目录)。
   # 手动:docker compose run --rm reviewer   (建议先跑一次 loader 更新行情)
@@ -135,6 +137,8 @@ services:
     volumes:
       - "./watchlist.txt:/data/watchlist.txt:ro"
       - "./watchlist-etf.txt:/data/watchlist-etf.txt:ro"
+      - "./watchlist-etf-broad.txt:/data/watchlist-etf-broad.txt:ro"
+      - "./watchlist-kechuang-semi.txt:/data/watchlist-kechuang-semi.txt:ro"
       - "./reports:/reports"
 
 volumes:
