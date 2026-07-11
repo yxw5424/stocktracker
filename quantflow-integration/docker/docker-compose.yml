@@ -128,7 +128,11 @@ services:
       HTSC_ORDER_LOTS: "${HTSC_ORDER_LOTS:-100}"     # 兜底手数(定量失败时)
       HTSC_BUDGET_PCT: "${HTSC_BUDGET_PCT:-0.31}"    # 每笔≈账户总资产31%(等权3只)
       HTSC_ORDER_BUDGET: "${HTSC_ORDER_BUDGET:-0}"   # 或固定金额(元);0=不用
-      SIGNAL_ENGINE: "${SIGNAL_ENGINE:-momentum_v1}" # momentum_v1(冻结版)|trend
+      # 信号引擎:momentum_v1(比赛冻结版,7/20后退役)|alloc_p1(走查冠军:股债金月度
+      # 再平衡,AI审偏离;建议配 FULL_AUTH=0)|trend(旧)
+      SIGNAL_ENGINE: "${SIGNAL_ENGINE:-momentum_v1}"
+      ALLOC_WEIGHTS: "${ALLOC_WEIGHTS:-510300.SH:0.40,511260.SH:0.40,518880.SH:0.20}"
+      PAPER_TOTAL: "${PAPER_TOTAL:-1000000}"         # alloc_p1 纸面模式的名义总资产(元)
       SIGNAL_EXCLUDE: "${SIGNAL_EXCLUDE:-511990.SH}" # 信号池排除(货币ETF只当停泊)
       WATCHLIST_FILE: "${WATCHLIST_FILE:-/data/watchlist.txt}"  # 参赛用 /data/watchlist-etf.txt
       # 资金流/新闻走东财新浪、决策走 deepseek,全直连(防宿主代理注入)。

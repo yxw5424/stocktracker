@@ -100,14 +100,22 @@ def _order_qty(price):
     return ORDER_LOTS, "固定手数兜底"
 
 
-def broker_order(side, symbol, price, log_lines, half=False):
+def broker_order(side, symbol, price, log_lines, half=False, qty=None):
     """把决定映射成华泰模拟盘下单;side 含'买'→buy,含'卖'→sell。返回结果字符串。
-    买入按账户资产比例定量(等权),AI 判「半仓」时减半;卖出由后端按持仓校验。"""
+    默认按账户资产比例定量(等权);配置引擎(alloc_p1)会直接传入 qty。
+    AI 判「半仓」时减半;卖出由后端按持仓校验。"""
     if _BROKER is None:
         return ""
     code, ex = split_symbol(symbol)
     direction = "buy" if "买" in side else "sell"
-    qty, how = _order_qty(price)
+    if qty is not None:
+        qty, how = int(qty), "配置引擎定量"
+        if half and qty > 100:   # 配置引擎的半仓=调仓量减半,买卖同理(与账本一致)
+            qty = max(100, int(qty / 2 / 100) * 100)
+            how += ",AI判半仓已减半"
+            half = False
+    else:
+        qty, how = _order_qty(price)
     if half and direction == "buy" and qty > 100:
         qty = max(100, int(qty / 2 / 100) * 100)
         how += ",AI判半仓已减半"
@@ -289,6 +297,45 @@ def momentum_v1_signals(bars, positions, trade_date):
         signals.append({"symbol": s, "side": "买入", "price": prices[s],
                         "rule": f"[v1周五调仓] 20日动量第{rank}名,{tag}"})
     return signals
+
+
+def alloc_signals(bars, positions, trade_date):
+    """P1 配置引擎(四轮走查唯一过线者,见 A-SHARE-STRATEGY-RESEARCH.md):
+    股/债/金按 ALLOC_WEIGHTS 月度再平衡。只在每月首个交易日出信号(以数据日为准);
+    偏离目标权重<2%总资产不动。信号带 qty(股数),AI 复核的角色=审偏离,
+    不再是审动量信号。账本(ai_review_positions)在此引擎下记录 qty 字段。"""
+    weights = {}
+    for part in os.getenv("ALLOC_WEIGHTS",
+                          "510300.SH:0.40,511260.SH:0.40,518880.SH:0.20").split(","):
+        try:
+            s, w = part.rsplit(":", 1)
+            weights[_norm(s.strip())] = float(w)
+        except ValueError:
+            continue
+    ref = next((bars[s] for s in weights if s in bars and len(bars[s]) >= 2), None)
+    if ref is None:
+        return []
+    d_today, d_prev = str(ref["date"].iloc[-1]), str(ref["date"].iloc[-2])
+    if d_today[:6] == d_prev[:6]:
+        return []   # 不是本月首个交易日
+    total = _account_total() or float(os.getenv("PAPER_TOTAL", "1000000"))
+    sigs = []
+    for s, w in weights.items():
+        if s not in bars or bars[s] is None or not len(bars[s]):
+            continue
+        price = float(bars[s]["close"].iloc[-1])
+        cur_qty = float((positions.get(s) or {}).get("qty", 0) or 0)
+        delta_val = total * w - cur_qty * price
+        if abs(delta_val) < total * 0.02:
+            continue
+        qty = int(abs(delta_val) / price / 100) * 100
+        if qty < 100:
+            continue
+        sigs.append({"symbol": s, "side": "买入" if delta_val > 0 else "卖出",
+                     "price": price, "qty": qty, "weight": w,
+                     "rule": (f"[P1月度再平衡] 目标{w:.0%},当前偏离 {delta_val / total:+.1%}"
+                              f"(按总资产 {total:,.0f} 计)")})
+    return sigs
 
 
 # --------------------------------------------------------------------------- #
@@ -649,7 +696,9 @@ def main():
 
     positions = {p["symbol"]: p for p in db[COL_POS].find()}
     engine = os.getenv("SIGNAL_ENGINE", "momentum_v1").lower()
-    if engine == "momentum_v1":
+    if engine == "alloc_p1":
+        signals = alloc_signals(bars, positions, today)
+    elif engine == "momentum_v1":
         signals = momentum_v1_signals(bars, positions, today)
     else:
         signals = trend_signals(bars, positions)
@@ -679,13 +728,30 @@ def main():
             "decision": d["decision"], "reason": d.get("reason", ""),
             "confidence": d.get("confidence"), "evaluated": False})
         # 虚拟账本(纸面):执行/半仓的买入入账,执行的卖出出账
-        if sig["side"] == "买入" and d["decision"] in ("执行", "半仓"):
+        if engine == "alloc_p1":
+            # 配置引擎:账本按 qty 增减(半仓=执行一半的调仓量)
+            if d["decision"] in ("执行", "半仓"):
+                qexec = sig["qty"]
+                if d["decision"] == "半仓" and qexec > 100:
+                    qexec = max(100, int(qexec / 2 / 100) * 100)
+                cur = float((positions.get(sig["symbol"]) or {}).get("qty", 0) or 0)
+                new_qty = cur + qexec if sig["side"] == "买入" else cur - qexec
+                if new_qty > 0:
+                    db[COL_POS].update_one(
+                        {"symbol": sig["symbol"]},
+                        {"$set": {"symbol": sig["symbol"], "qty": new_qty,
+                                  "entry_price": sig["price"], "entry_date": today,
+                                  "high_since": sig["price"], "alloc": True,
+                                  "weight": sig.get("weight")}}, upsert=True)
+                else:
+                    db[COL_POS].delete_one({"symbol": sig["symbol"]})
+        elif sig["side"] == "买入" and d["decision"] in ("执行", "半仓"):
             db[COL_POS].update_one(
                 {"symbol": sig["symbol"]},
                 {"$set": {"symbol": sig["symbol"], "entry_price": sig["price"],
                           "entry_date": today, "high_since": sig["price"],
                           "half": d["decision"] == "半仓"}}, upsert=True)
-        if sig["side"] == "卖出" and d["decision"] in ("执行", "半仓"):
+        elif sig["side"] == "卖出" and d["decision"] in ("执行", "半仓"):
             db[COL_POS].delete_one({"symbol": sig["symbol"]})
         icon = {"执行": "✅", "半仓": "🌓", "否决": "⛔"}[d["decision"]]
         lines += [f"### {icon} {sig['side']} {sig['symbol']} @ {sig['price']}",
@@ -694,7 +760,7 @@ def main():
                   f"- **AI 决定:{d['decision']}**(信心 {d.get('confidence')}) —— {d.get('reason','')}"]
         if d["decision"] in ("执行", "半仓"):
             ob = broker_order(sig["side"], sig["symbol"], sig["price"], lines,
-                              half=(d["decision"] == "半仓"))
+                              half=(d["decision"] == "半仓"), qty=sig.get("qty"))
             if ob:
                 lines.append(ob)
         lines.append("")
