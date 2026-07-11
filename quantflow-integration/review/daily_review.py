@@ -299,11 +299,8 @@ def momentum_v1_signals(bars, positions, trade_date):
     return signals
 
 
-def alloc_signals(bars, positions, trade_date):
-    """P1 配置引擎(四轮走查唯一过线者,见 A-SHARE-STRATEGY-RESEARCH.md):
-    股/债/金按 ALLOC_WEIGHTS 月度再平衡。只在每月首个交易日出信号(以数据日为准);
-    偏离目标权重<2%总资产不动。信号带 qty(股数),AI 复核的角色=审偏离,
-    不再是审动量信号。账本(ai_review_positions)在此引擎下记录 qty 字段。"""
+def _alloc_weights():
+    """解析 ALLOC_WEIGHTS(如 '510300.SH:0.40,511260.SH:0.40,518880.SH:0.20')。"""
     weights = {}
     for part in os.getenv("ALLOC_WEIGHTS",
                           "510300.SH:0.40,511260.SH:0.40,518880.SH:0.20").split(","):
@@ -312,6 +309,15 @@ def alloc_signals(bars, positions, trade_date):
             weights[_norm(s.strip())] = float(w)
         except ValueError:
             continue
+    return weights
+
+
+def alloc_signals(bars, positions, trade_date):
+    """P1 配置引擎(四轮走查唯一过线者,见 A-SHARE-STRATEGY-RESEARCH.md):
+    股/债/金按 ALLOC_WEIGHTS 月度再平衡。只在每月首个交易日出信号(以数据日为准);
+    偏离目标权重<2%总资产不动。信号带 qty(股数),AI 复核的角色=审偏离,
+    不再是审动量信号。账本(ai_review_positions)在此引擎下记录 qty 字段。"""
+    weights = _alloc_weights()
     ref = next((bars[s] for s in weights if s in bars and len(bars[s]) >= 2), None)
     if ref is None:
         return []
@@ -683,7 +689,11 @@ def reconcile(db, today):
 # --------------------------------------------------------------------------- #
 def main():
     db = mongo_db()
+    engine = os.getenv("SIGNAL_ENGINE", "alloc_p1").lower()
     watch = read_watchlist()
+    if engine == "alloc_p1":
+        # 配置引擎的标的必须在行情列表里,无论 watchlist 写没写它们
+        watch = list(dict.fromkeys(list(_alloc_weights()) + watch))
     if not watch:
         print("自选股为空(watchlist.txt / WATCHLIST)")
         return
@@ -695,7 +705,6 @@ def main():
     print(f"复核日:{today},自选 {len(watch)} 只,有数据 {len(bars)} 只")
 
     positions = {p["symbol"]: p for p in db[COL_POS].find()}
-    engine = os.getenv("SIGNAL_ENGINE", "momentum_v1").lower()
     if engine == "alloc_p1":
         signals = alloc_signals(bars, positions, today)
     elif engine == "momentum_v1":

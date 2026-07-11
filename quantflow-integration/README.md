@@ -38,6 +38,12 @@ python run_local_secure.py      # 只绑 127.0.0.1 + LocalGuard 拦截跨站请�
 总览(账户/权益曲线/挂单/报告)、自选行情(迷你走势)、资讯、决策·对账、报告列表
 都在标签页里,QuantFlow 工作台和回测汇总表从右上角进 —— 不用再在地址栏换 URL。
 
+**现役系统(2026-07 起)**:主引擎 `SIGNAL_ENGINE=alloc_p1` —— 股/债/金
+40/40/20 月度再平衡(四轮无前视走查唯一过线策略,证据见
+`A-SHARE-STRATEGY-RESEARCH.md`),AI 复核角色=审偏离。日常只有两条命令:
+`LOAD_ALL=1 loader`(更新行情)→ `reviewer`(月初自动出再平衡信号,平时只
+快照权益/复盘)。ETF 比赛线(momentum_v1)已退役留档。
+
 > ⚠ 关于历史回测数字:见 `BACKTEST-AUDIT.md` —— 平台按当日开盘撮合而旧策略用当日
 > 收盘算信号(前视偏差),涨跌停带也曾一律写成 ±10%。已修复(v2 无前视策略写法 +
 > loader 按板块写带宽);以 `flows/a3-clean-vs-v1-flow.json` 重测的数字为准。

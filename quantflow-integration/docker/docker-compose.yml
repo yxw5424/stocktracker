@@ -117,7 +117,7 @@ services:
       MONGO_AUTH_DB: "admin"
       MONGO_DB: "panda"
       PROVIDER: "${PROVIDER:-deepseek}"
-      FULL_AUTH: "${FULL_AUTH:-1}"        # 1=全权模式(agent 可主动买卖,纸面)
+      FULL_AUTH: "${FULL_AUTH:-0}"        # 配置引擎时代默认0:AI只审偏离,不自主开仓(可覆写)
       EVAL_DAYS: "${EVAL_DAYS:-5}"
       DEEPSEEK_API_KEY: "${DEEPSEEK_API_KEY:-}"
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
@@ -128,9 +128,9 @@ services:
       HTSC_ORDER_LOTS: "${HTSC_ORDER_LOTS:-100}"     # 兜底手数(定量失败时)
       HTSC_BUDGET_PCT: "${HTSC_BUDGET_PCT:-0.31}"    # 每笔≈账户总资产31%(等权3只)
       HTSC_ORDER_BUDGET: "${HTSC_ORDER_BUDGET:-0}"   # 或固定金额(元);0=不用
-      # 信号引擎:momentum_v1(比赛冻结版,7/20后退役)|alloc_p1(走查冠军:股债金月度
-      # 再平衡,AI审偏离;建议配 FULL_AUTH=0)|trend(旧)
-      SIGNAL_ENGINE: "${SIGNAL_ENGINE:-momentum_v1}"
+      # 信号引擎:alloc_p1(现役主引擎:股债金月度再平衡,AI审偏离,走查唯一过线者)
+      # |momentum_v1(已退役:前视bug时代的比赛引擎,留档)|trend(旧)
+      SIGNAL_ENGINE: "${SIGNAL_ENGINE:-alloc_p1}"
       ALLOC_WEIGHTS: "${ALLOC_WEIGHTS:-510300.SH:0.40,511260.SH:0.40,518880.SH:0.20}"
       PAPER_TOTAL: "${PAPER_TOTAL:-1000000}"         # alloc_p1 纸面模式的名义总资产(元)
       SIGNAL_EXCLUDE: "${SIGNAL_EXCLUDE:-511990.SH}" # 信号池排除(货币ETF只当停泊)
