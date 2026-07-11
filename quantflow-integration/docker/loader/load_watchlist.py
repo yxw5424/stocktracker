@@ -59,13 +59,17 @@ def bare(sym: str) -> str:
     return sym.split(".")[0]
 
 
-def limit_band(sym: str) -> float:
+# 已知 20% 涨跌幅的非588 ETF(跟踪创业板类指数);可用 ETF20 环境变量追加
+_ETF20_BUILTIN = {"159915", "159952", "159948", "159957"}
+
+
+def limit_band(sym: str, is_etf: bool) -> float:
     """按板块规则给涨跌幅带宽(回测引擎会用 limit_up/down 拒单和截价,写错会造成
-    假拒单/假优价成交)。688/300=20%,北交所=30%,588(科创ETF)/159(创业板类ETF按
-    环境变量 ETF20 名单)=20%,其余 10%。ETF20 例:ETF20=588000,588170,159915"""
-    b, is_etf = bare(sym), os.getenv("ASSET_TYPE", "stock").lower() == "etf"
+    假拒单/假优价成交)。688/300=20%,北交所=30%,588(科创ETF)/创业板类ETF=20%,
+    其余 10%。追加名单:ETF20=159781,...(逗号分隔)"""
+    b = bare(sym)
     if is_etf:
-        etf20 = {x.strip() for x in os.getenv("ETF20", "").split(",") if x.strip()}
+        etf20 = _ETF20_BUILTIN | {x.strip() for x in os.getenv("ETF20", "").split(",") if x.strip()}
         if b.startswith("588") or b in etf20:
             return 0.20
         return 0.10
@@ -74,6 +78,29 @@ def limit_band(sym: str) -> float:
     if b.startswith(("688", "689", "300", "301", "302")):
         return 0.20
     return 0.10
+
+
+def read_watchlist_file(path: str) -> list:
+    """读单个名单文件(一行一个代码,#注释),返回归一化后的去重列表。"""
+    out, seen = [], set()
+    if os.path.exists(path):
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.split("#", 1)[0].strip()
+                s = norm_symbol(line) if line else ""
+                if s and s not in seen:
+                    seen.add(s)
+                    out.append(s)
+    return out
+
+
+# LOAD_ALL=1 时按此清单全量灌入:(名单文件, 是否ETF)。以后加新名单在这里登记。
+_ALL_LISTS = [
+    ("/data/watchlist.txt", False),
+    ("/data/watchlist-kechuang-semi.txt", False),
+    ("/data/watchlist-etf.txt", True),
+    ("/data/watchlist-etf-broad.txt", True),
+]
 
 
 def read_watchlist() -> list:
@@ -198,9 +225,10 @@ def _fetch_etf_daily(sym, start, end):
         return _retry(sina, f"新浪ETF {sym}", tries=3)
 
 
-def load_daily(db, symbols, start, end):
+def load_daily(db, symbols, start, end, is_etf=None):
     col = db["stock_market"]
-    is_etf = os.getenv("ASSET_TYPE", "stock").lower() == "etf"
+    if is_etf is None:
+        is_etf = os.getenv("ASSET_TYPE", "stock").lower() == "etf"
     fetch = _fetch_etf_daily if is_etf else _fetch_stock_daily
     total = 0
     for sym in symbols:
@@ -214,7 +242,7 @@ def load_daily(db, symbols, start, end):
             print(f"[daily][EMPTY] {sym}")
             continue
         df = df.sort_values("date").reset_index(drop=True)
-        band = limit_band(sym)
+        band = limit_band(sym, is_etf)
         prev_close = None
         ops = []
         for _, r in df.iterrows():
@@ -433,14 +461,34 @@ def ensure_indexes(db):
 
 
 def main():
-    symbols = read_watchlist()
-    if not symbols:
-        print("没有自选股。请在 docker/watchlist.txt 里一行一个填代码,或设 WATCHLIST 环境变量。")
-        sys.exit(1)
-    start = os.getenv("START_DATE", "20240101")
+    load_all = os.getenv("LOAD_ALL") == "1"
     end = os.getenv("END_DATE") or datetime.date.today().strftime("%Y%m%d")
-    print(f"自选股 {len(symbols)} 只:{', '.join(symbols)}")
-    print(f"区间 {start} ~ {end}")
+
+    if load_all:
+        # 全量模式:四份名单一次灌完(股票名单走股票源,ETF名单走ETF源,跨名单去重)。
+        # 以后更新数据也用这一条命令,不再挑名单/挑类型。
+        start = os.getenv("START_DATE", "20210101")
+        batches, seen = [], set()
+        for path, is_etf in _ALL_LISTS:
+            syms = [s for s in read_watchlist_file(path) if s not in seen]
+            seen.update(syms)
+            if syms:
+                batches.append((path, is_etf, syms))
+            else:
+                print(f"[全量] {path} 缺失或为空,跳过")
+        if not batches:
+            print("全量模式下四份名单都为空,检查 volume 挂载。")
+            sys.exit(1)
+        all_syms = [s for _, _, syms in batches for s in syms]
+        print(f"[全量] 共 {len(all_syms)} 只(股票+ETF),区间 {start} ~ {end}")
+    else:
+        symbols = read_watchlist()
+        if not symbols:
+            print("没有自选股。请在 docker/watchlist.txt 里一行一个填代码,或设 WATCHLIST 环境变量。")
+            sys.exit(1)
+        start = os.getenv("START_DATE", "20240101")
+        print(f"自选股 {len(symbols)} 只:{', '.join(symbols)}")
+        print(f"区间 {start} ~ {end}")
 
     db = mongo_db()
     # 清理早期版本的错后缀数据:5开头是沪市ETF/基金,深市不存在 5xxxxx,
@@ -449,14 +497,22 @@ def main():
         n = db[coll].delete_many({"symbol": {"$regex": r"^5\d{5}\.SZ$"}}).deleted_count
         if n:
             print(f"[清理] {coll} 删除错后缀(5xxxxx.SZ)文档 {n} 条")
-    load_info(db, symbols)
     load_calendar(db, end)
     load_benchmarks(db, start, end)
-    load_daily(db, symbols, start, end)
-    if os.getenv("LOAD_MINUTE") == "1":
-        load_minute(db, symbols, start, end)
+    if load_all:
+        load_info(db, all_syms)
+        for path, is_etf, syms in batches:
+            print(f"[全量] {path}({'ETF' if is_etf else '股票'}源,{len(syms)} 只)")
+            load_daily(db, syms, start, end, is_etf=is_etf)
+        if os.getenv("LOAD_MINUTE") == "1":
+            print("[全量] LOAD_MINUTE 在全量模式下忽略(量太大,单独按名单跑)")
+    else:
+        load_info(db, symbols)
+        load_daily(db, symbols, start, end)
+        if os.getenv("LOAD_MINUTE") == "1":
+            load_minute(db, symbols, start, end)
     ensure_indexes(db)
-    print("完成。现在可以在 /quantflow/ 里对这些股票跑回测了。")
+    print("完成。记得重启 quantflow 让新数据生效:docker compose restart quantflow")
 
 
 if __name__ == "__main__":

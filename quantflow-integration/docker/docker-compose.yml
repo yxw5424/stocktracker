@@ -85,8 +85,9 @@ services:
       LOAD_MINUTE: "${LOAD_MINUTE:-0}"   # 设 1 额外拉分时线(慢、量大)
       WATCHLIST: "${WATCHLIST:-}"        # 也可用环境变量覆盖 watchlist.txt
       WATCHLIST_FILE: "${WATCHLIST_FILE:-/data/watchlist.txt}"  # 换 ETF 名单:/data/watchlist-etf.txt
-      ASSET_TYPE: "${ASSET_TYPE:-stock}"  # etf=用 ETF 数据源(参赛用)
-      ETF20: "${ETF20:-}"                 # 20%涨跌幅的非588 ETF名单(如创业板ETF 159915),逗号分隔
+      ASSET_TYPE: "${ASSET_TYPE:-stock}"  # etf=用 ETF 数据源(参赛用;LOAD_ALL=1 时忽略)
+      ETF20: "${ETF20:-}"                 # 20%涨跌幅的非588 ETF追加名单(159915等已内置),逗号分隔
+      LOAD_ALL: "${LOAD_ALL:-0}"          # 1=四份名单全量一次灌完(默认2021起),以后更新只跑这一条
       # loader 只访问国内行情源(东财/新浪/上交所)和容器内 mongo，全部直连：
       # 显式置空，防止 Docker Desktop 把宿主机代理注入进来导致 SSL EOF。
       HTTP_PROXY: ""
