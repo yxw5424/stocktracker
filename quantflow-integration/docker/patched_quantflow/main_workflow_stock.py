@@ -81,6 +81,15 @@ def start(back_test_id:str,code:str,start_date:str,end_date:str, start_capital: 
     back_test_id = handle_message['back_test_id']
     DevInit.init_log_env('panda')
     DevInit.init_remote_sr_log(back_test_id, handle_message['run_params'], strategy_context)
+    # [本地补丁] 把撮合模式写进每次回测的运行日志,防止在错误模式下误读结果
+    # (开盘撮合+当日收盘信号=前视偏差;尾盘执行对照必须显示"当日收盘")
+    try:
+        SRLogger.info("[撮合审计] matching_type=%s(%s撮合), slippage=%s" % (
+            handle_message['matching_type'],
+            "当日收盘" if handle_message['matching_type'] == 0 else "当日开盘",
+            handle_message['slippage']))
+    except Exception:
+        pass
 
     # 全局动态字典初始化
     global_args = {}
