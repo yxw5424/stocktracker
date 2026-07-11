@@ -1,0 +1,740 @@
+{
+  "format_version": "1.0",
+  "name": "P5/P6配置升级走查(风险平价×波动率目标)",
+  "description": "P1转正后的两个候选升级,均不预测收益、只塑造风险(收益预测已由四轮实验证伪):P5=按60日波动率倒数分配权重(夹10%-60%);P6=股票仓位=40%×(16%目标波动/沪深300实际波动,夹0.4-1.25),黄金固定20%,余量给债。对照P1:训练+9.81%/DD-10.27%,测试+16.44%/DD-8.30%。录用标准:两窗『年化÷|回撤|』都优于P1;只赢一窗=不换。数据已在库(LOAD_ALL),直接拖入运行。",
+  "litegraph": {
+    "last_node_id": 9,
+    "last_link_id": 8,
+    "nodes": [
+      {
+        "id": 1,
+        "type": "StockBacktestControl",
+        "title": "P5 风险平价 · 训练21H2-24",
+        "pos": [
+          80,
+          40
+        ],
+        "size": [
+          420,
+          340
+        ],
+        "flags": {
+          "uuid": "2f6a3364-ea6c-40b9-b9bf-29eecc5e2097"
+        },
+        "order": 0,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "策略代码",
+            "type": 0,
+            "link": null,
+            "fieldName": "code",
+            "hide": false
+          },
+          {
+            "name": "因子值",
+            "type": 0,
+            "link": null,
+            "fieldName": "factors",
+            "hide": false
+          },
+          {
+            "name": "初始资金",
+            "type": 0,
+            "link": null,
+            "fieldName": "start_capital",
+            "hide": true
+          },
+          {
+            "name": "基准指数",
+            "type": 0,
+            "link": null,
+            "fieldName": "standard_symbol",
+            "hide": false
+          },
+          {
+            "name": "佣金率",
+            "type": 0,
+            "link": null,
+            "fieldName": "commission_rate",
+            "hide": true
+          },
+          {
+            "name": "回测频率",
+            "type": 0,
+            "link": null,
+            "fieldName": "frequency",
+            "hide": true
+          },
+          {
+            "name": "回测开始时间",
+            "type": 0,
+            "link": null,
+            "fieldName": "start_date",
+            "hide": true
+          },
+          {
+            "name": "回测结束时间",
+            "type": 0,
+            "link": null,
+            "fieldName": "end_date",
+            "hide": true
+          }
+        ],
+        "outputs": [
+          {
+            "name": "回测id",
+            "type": 0,
+            "links": [
+              1,
+              2
+            ],
+            "fieldName": "backtest_id",
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "策略代码": "# -*- coding: utf-8 -*-\n# P5 风险平价 —— P1 的第一个候选升级:权重不再固定 40/40/20,\n# 每月按 60 日波动率倒数分配(高波资产少拿,各资产风险贡献趋于均衡),\n# 单资产权重夹在 [10%, 60%] 防极端。不预测收益,只塑造风险。\n# 无前视:全部信号用昨收,今开成交。录用标准:两窗\"年化÷回撤\"都优于P1。\nfrom panda_backtest.api.api import *\nfrom panda_backtest.api.stock_api import *\nimport numpy as np\nimport pandas as pd\nimport datetime\n\nASSETS = ['510300.SH', '511260.SH', '518880.SH']\nVOLD, W_MIN, W_MAX = 60, 0.10, 0.60\n\ndef initialize(context):\n    context.hist = {s: [] for s in ASSETS}\n    context.prev_month = None\n\ndef _vol(h):\n    a = np.array(h[-(VOLD + 1):], dtype=float)\n    if len(a) < VOLD + 1 or (a[:-1] <= 0).any():\n        return None\n    return float(np.std(np.diff(a) / a[:-1]))\n\ndef handle_data(context, bar):\n    acc = context.stock_account_dict['8888']\n    try:\n        dt = datetime.datetime.strptime(str(context.trade_date), '%Y%m%d')\n        cur_month = (dt.year, dt.month)\n    except:\n        cur_month = None\n\n    # ===== 决策:只用截至昨收的 hist =====\n    last = {s: context.hist[s][-1] for s in context.hist if context.hist.get(s)}\n    rebal = cur_month is not None and cur_month != context.prev_month\n    if cur_month is not None:\n        context.prev_month = cur_month\n\n    if rebal:\n        vols = {s: _vol(context.hist.get(s, [])) for s in ASSETS}\n        if all(v for v in vols.values()) and all(s in last for s in ASSETS):\n            inv = {s: 1.0 / vols[s] for s in ASSETS}\n            tot_inv = sum(inv.values())\n            w = {s: min(W_MAX, max(W_MIN, inv[s] / tot_inv)) for s in ASSETS}\n            norm = sum(w.values())\n            w = {s: w[s] / norm * 0.95 for s in ASSETS}   # 留5%现金\n            total = acc.total_value\n            orders = []\n            for s in ASSETS:\n                pos = acc.positions.get(s)\n                cur_qty = pos.sellable if pos else 0\n                tgt_qty = int(total * w[s] / last[s] / 100) * 100\n                delta = tgt_qty - cur_qty\n                if abs(delta) * last[s] < total * 0.02 or abs(delta) < 100:\n                    continue\n                orders.append((s, delta, w[s]))\n            for s, delta, wi in sorted(orders, key=lambda x: x[1]):   # 先卖后买\n                if delta < 0:\n                    order_shares('8888', s, delta, style=MarketOrderStyle)\n                    SRLogger.info('风险平价卖出 %s %d股(目标权重%.0f%%)' % (s, -delta, wi * 100))\n                elif acc.cash >= delta * last[s]:\n                    order_shares('8888', s, delta, style=MarketOrderStyle)\n                    SRLogger.info('风险平价买入 %s %d股(目标权重%.0f%%)' % (s, delta, wi * 100))\n                else:\n                    SRLogger.info('想买 %s 但现金不足' % s)\n\n    # ===== 收盘入库 =====\n    for s in list(context.hist.keys()):\n        try:\n            b = bar[s]\n            if b is None or getattr(b, 'close', None) in (None, 0):\n                continue\n            context.hist[s].append(b.close)\n            if len(context.hist[s]) > 250:\n                context.hist[s] = context.hist[s][-250:]\n        except Exception as e:\n            SRLogger.info('数据异常 %s: %s' % (s, e))\n            continue\n",
+          "初始资金": 1000000,
+          "基准指数": "沪深300",
+          "佣金率": 1,
+          "回测频率": "1d",
+          "回测开始时间": "20210701",
+          "回测结束时间": "20241231"
+        }
+      },
+      {
+        "id": 2,
+        "type": "BackTestResultControl",
+        "title": "回测结果(点开看图)",
+        "pos": [
+          560,
+          40
+        ],
+        "size": [
+          320,
+          140
+        ],
+        "flags": {
+          "uuid": "10e274d6-c641-4e97-a1cf-e290d0e2c456"
+        },
+        "order": 1,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "回测任务",
+            "type": 0,
+            "link": 1,
+            "fieldName": "task_id",
+            "hide": false
+          }
+        ],
+        "outputs": [
+          {
+            "name": "图表绘制",
+            "type": 0,
+            "links": [],
+            "fieldName": "task_id",
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "回测任务": "error"
+        }
+      },
+      {
+        "id": 3,
+        "type": "StockBacktestControl",
+        "title": "P5 风险平价 · 测试25-26H1",
+        "pos": [
+          1060,
+          40
+        ],
+        "size": [
+          420,
+          340
+        ],
+        "flags": {
+          "uuid": "3af9a4a9-4d3b-4706-8c38-120c87e1e4f5"
+        },
+        "order": 2,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "策略代码",
+            "type": 0,
+            "link": null,
+            "fieldName": "code",
+            "hide": false
+          },
+          {
+            "name": "因子值",
+            "type": 0,
+            "link": null,
+            "fieldName": "factors",
+            "hide": false
+          },
+          {
+            "name": "初始资金",
+            "type": 0,
+            "link": null,
+            "fieldName": "start_capital",
+            "hide": true
+          },
+          {
+            "name": "基准指数",
+            "type": 0,
+            "link": null,
+            "fieldName": "standard_symbol",
+            "hide": false
+          },
+          {
+            "name": "佣金率",
+            "type": 0,
+            "link": null,
+            "fieldName": "commission_rate",
+            "hide": true
+          },
+          {
+            "name": "回测频率",
+            "type": 0,
+            "link": null,
+            "fieldName": "frequency",
+            "hide": true
+          },
+          {
+            "name": "回测开始时间",
+            "type": 0,
+            "link": null,
+            "fieldName": "start_date",
+            "hide": true
+          },
+          {
+            "name": "回测结束时间",
+            "type": 0,
+            "link": null,
+            "fieldName": "end_date",
+            "hide": true
+          }
+        ],
+        "outputs": [
+          {
+            "name": "回测id",
+            "type": 0,
+            "links": [
+              3,
+              4
+            ],
+            "fieldName": "backtest_id",
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "策略代码": "# -*- coding: utf-8 -*-\n# P5 风险平价 —— P1 的第一个候选升级:权重不再固定 40/40/20,\n# 每月按 60 日波动率倒数分配(高波资产少拿,各资产风险贡献趋于均衡),\n# 单资产权重夹在 [10%, 60%] 防极端。不预测收益,只塑造风险。\n# 无前视:全部信号用昨收,今开成交。录用标准:两窗\"年化÷回撤\"都优于P1。\nfrom panda_backtest.api.api import *\nfrom panda_backtest.api.stock_api import *\nimport numpy as np\nimport pandas as pd\nimport datetime\n\nASSETS = ['510300.SH', '511260.SH', '518880.SH']\nVOLD, W_MIN, W_MAX = 60, 0.10, 0.60\n\ndef initialize(context):\n    context.hist = {s: [] for s in ASSETS}\n    context.prev_month = None\n\ndef _vol(h):\n    a = np.array(h[-(VOLD + 1):], dtype=float)\n    if len(a) < VOLD + 1 or (a[:-1] <= 0).any():\n        return None\n    return float(np.std(np.diff(a) / a[:-1]))\n\ndef handle_data(context, bar):\n    acc = context.stock_account_dict['8888']\n    try:\n        dt = datetime.datetime.strptime(str(context.trade_date), '%Y%m%d')\n        cur_month = (dt.year, dt.month)\n    except:\n        cur_month = None\n\n    # ===== 决策:只用截至昨收的 hist =====\n    last = {s: context.hist[s][-1] for s in context.hist if context.hist.get(s)}\n    rebal = cur_month is not None and cur_month != context.prev_month\n    if cur_month is not None:\n        context.prev_month = cur_month\n\n    if rebal:\n        vols = {s: _vol(context.hist.get(s, [])) for s in ASSETS}\n        if all(v for v in vols.values()) and all(s in last for s in ASSETS):\n            inv = {s: 1.0 / vols[s] for s in ASSETS}\n            tot_inv = sum(inv.values())\n            w = {s: min(W_MAX, max(W_MIN, inv[s] / tot_inv)) for s in ASSETS}\n            norm = sum(w.values())\n            w = {s: w[s] / norm * 0.95 for s in ASSETS}   # 留5%现金\n            total = acc.total_value\n            orders = []\n            for s in ASSETS:\n                pos = acc.positions.get(s)\n                cur_qty = pos.sellable if pos else 0\n                tgt_qty = int(total * w[s] / last[s] / 100) * 100\n                delta = tgt_qty - cur_qty\n                if abs(delta) * last[s] < total * 0.02 or abs(delta) < 100:\n                    continue\n                orders.append((s, delta, w[s]))\n            for s, delta, wi in sorted(orders, key=lambda x: x[1]):   # 先卖后买\n                if delta < 0:\n                    order_shares('8888', s, delta, style=MarketOrderStyle)\n                    SRLogger.info('风险平价卖出 %s %d股(目标权重%.0f%%)' % (s, -delta, wi * 100))\n                elif acc.cash >= delta * last[s]:\n                    order_shares('8888', s, delta, style=MarketOrderStyle)\n                    SRLogger.info('风险平价买入 %s %d股(目标权重%.0f%%)' % (s, delta, wi * 100))\n                else:\n                    SRLogger.info('想买 %s 但现金不足' % s)\n\n    # ===== 收盘入库 =====\n    for s in list(context.hist.keys()):\n        try:\n            b = bar[s]\n            if b is None or getattr(b, 'close', None) in (None, 0):\n                continue\n            context.hist[s].append(b.close)\n            if len(context.hist[s]) > 250:\n                context.hist[s] = context.hist[s][-250:]\n        except Exception as e:\n            SRLogger.info('数据异常 %s: %s' % (s, e))\n            continue\n",
+          "初始资金": 1000000,
+          "基准指数": "沪深300",
+          "佣金率": 1,
+          "回测频率": "1d",
+          "回测开始时间": "20250101",
+          "回测结束时间": "20260630"
+        }
+      },
+      {
+        "id": 4,
+        "type": "BackTestResultControl",
+        "title": "回测结果(点开看图)",
+        "pos": [
+          1540,
+          40
+        ],
+        "size": [
+          320,
+          140
+        ],
+        "flags": {
+          "uuid": "aa17d3c4-d915-49c6-a9ad-215264199bb4"
+        },
+        "order": 3,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "回测任务",
+            "type": 0,
+            "link": 3,
+            "fieldName": "task_id",
+            "hide": false
+          }
+        ],
+        "outputs": [
+          {
+            "name": "图表绘制",
+            "type": 0,
+            "links": [],
+            "fieldName": "task_id",
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "回测任务": "error"
+        }
+      },
+      {
+        "id": 5,
+        "type": "StockBacktestControl",
+        "title": "P6 波动率目标 · 训练21H2-24",
+        "pos": [
+          80,
+          460
+        ],
+        "size": [
+          420,
+          340
+        ],
+        "flags": {
+          "uuid": "3e0b71cb-06d9-4cc2-92f3-751d0544f477"
+        },
+        "order": 4,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "策略代码",
+            "type": 0,
+            "link": null,
+            "fieldName": "code",
+            "hide": false
+          },
+          {
+            "name": "因子值",
+            "type": 0,
+            "link": null,
+            "fieldName": "factors",
+            "hide": false
+          },
+          {
+            "name": "初始资金",
+            "type": 0,
+            "link": null,
+            "fieldName": "start_capital",
+            "hide": true
+          },
+          {
+            "name": "基准指数",
+            "type": 0,
+            "link": null,
+            "fieldName": "standard_symbol",
+            "hide": false
+          },
+          {
+            "name": "佣金率",
+            "type": 0,
+            "link": null,
+            "fieldName": "commission_rate",
+            "hide": true
+          },
+          {
+            "name": "回测频率",
+            "type": 0,
+            "link": null,
+            "fieldName": "frequency",
+            "hide": true
+          },
+          {
+            "name": "回测开始时间",
+            "type": 0,
+            "link": null,
+            "fieldName": "start_date",
+            "hide": true
+          },
+          {
+            "name": "回测结束时间",
+            "type": 0,
+            "link": null,
+            "fieldName": "end_date",
+            "hide": true
+          }
+        ],
+        "outputs": [
+          {
+            "name": "回测id",
+            "type": 0,
+            "links": [
+              5,
+              6
+            ],
+            "fieldName": "backtest_id",
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "策略代码": "# -*- coding: utf-8 -*-\n# P6 波动率目标 —— P1 的第二个候选升级:股票仓位随市场波动自动缩放。\n# 依据:波动率聚集是金融数据最稳健的可预测规律(Moreira-Muir, JF 2017:\n# 按波动缩放敞口改善夏普——它择的是\"波动\"不是\"收益\",与已证死的收益预测无关)。\n# 规则:每月,股票权重 = 40% × clip(目标年化波动16% / 沪深300近60日实际年化波动,\n# 0.4, 1.25);黄金固定20%;余下全给国债。市场狂躁→自动减股,平静→温和加回。\n# 无前视:全部信号用昨收,今开成交。录用标准:两窗\"年化÷回撤\"都优于P1。\nfrom panda_backtest.api.api import *\nfrom panda_backtest.api.stock_api import *\nimport numpy as np\nimport pandas as pd\nimport datetime\n\nEQ, BOND, GOLD = '510300.SH', '511260.SH', '518880.SH'\nBASE_EQ, GOLD_W, TARGET_VOL, VOLD = 0.40, 0.20, 0.16, 60\n\ndef initialize(context):\n    context.hist = {s: [] for s in (EQ, BOND, GOLD)}\n    context.prev_month = None\n\ndef _ann_vol(h):\n    a = np.array(h[-(VOLD + 1):], dtype=float)\n    if len(a) < VOLD + 1 or (a[:-1] <= 0).any():\n        return None\n    return float(np.std(np.diff(a) / a[:-1]) * np.sqrt(244))\n\ndef handle_data(context, bar):\n    acc = context.stock_account_dict['8888']\n    try:\n        dt = datetime.datetime.strptime(str(context.trade_date), '%Y%m%d')\n        cur_month = (dt.year, dt.month)\n    except:\n        cur_month = None\n\n    # ===== 决策:只用截至昨收的 hist =====\n    last = {s: context.hist[s][-1] for s in context.hist if context.hist.get(s)}\n    rebal = cur_month is not None and cur_month != context.prev_month\n    if cur_month is not None:\n        context.prev_month = cur_month\n\n    if rebal:\n        vol = _ann_vol(context.hist.get(EQ, []))\n        if vol and all(s in last for s in (EQ, BOND, GOLD)):\n            scale = min(1.25, max(0.40, TARGET_VOL / vol))\n            w = {EQ: BASE_EQ * scale, GOLD: GOLD_W}\n            w[BOND] = max(0.0, 0.95 - w[EQ] - w[GOLD])\n            total = acc.total_value\n            orders = []\n            for s, wi in w.items():\n                pos = acc.positions.get(s)\n                cur_qty = pos.sellable if pos else 0\n                tgt_qty = int(total * wi / last[s] / 100) * 100\n                delta = tgt_qty - cur_qty\n                if abs(delta) * last[s] < total * 0.02 or abs(delta) < 100:\n                    continue\n                orders.append((s, delta, wi))\n            for s, delta, wi in sorted(orders, key=lambda x: x[1]):\n                if delta < 0:\n                    order_shares('8888', s, delta, style=MarketOrderStyle)\n                    SRLogger.info('波动目标卖出 %s %d股(权重%.0f%%,300波动%.0f%%)' % (s, -delta, wi * 100, vol * 100))\n                elif acc.cash >= delta * last[s]:\n                    order_shares('8888', s, delta, style=MarketOrderStyle)\n                    SRLogger.info('波动目标买入 %s %d股(权重%.0f%%,300波动%.0f%%)' % (s, delta, wi * 100, vol * 100))\n                else:\n                    SRLogger.info('想买 %s 但现金不足' % s)\n\n    # ===== 收盘入库 =====\n    for s in list(context.hist.keys()):\n        try:\n            b = bar[s]\n            if b is None or getattr(b, 'close', None) in (None, 0):\n                continue\n            context.hist[s].append(b.close)\n            if len(context.hist[s]) > 250:\n                context.hist[s] = context.hist[s][-250:]\n        except Exception as e:\n            SRLogger.info('数据异常 %s: %s' % (s, e))\n            continue\n",
+          "初始资金": 1000000,
+          "基准指数": "沪深300",
+          "佣金率": 1,
+          "回测频率": "1d",
+          "回测开始时间": "20210701",
+          "回测结束时间": "20241231"
+        }
+      },
+      {
+        "id": 6,
+        "type": "BackTestResultControl",
+        "title": "回测结果(点开看图)",
+        "pos": [
+          560,
+          460
+        ],
+        "size": [
+          320,
+          140
+        ],
+        "flags": {
+          "uuid": "3dc5af06-068d-4ef5-a402-83176e95aed4"
+        },
+        "order": 5,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "回测任务",
+            "type": 0,
+            "link": 5,
+            "fieldName": "task_id",
+            "hide": false
+          }
+        ],
+        "outputs": [
+          {
+            "name": "图表绘制",
+            "type": 0,
+            "links": [],
+            "fieldName": "task_id",
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "回测任务": "error"
+        }
+      },
+      {
+        "id": 7,
+        "type": "StockBacktestControl",
+        "title": "P6 波动率目标 · 测试25-26H1",
+        "pos": [
+          1060,
+          460
+        ],
+        "size": [
+          420,
+          340
+        ],
+        "flags": {
+          "uuid": "8ac92352-37b6-4815-ab39-a87d8dfd9d2a"
+        },
+        "order": 6,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "策略代码",
+            "type": 0,
+            "link": null,
+            "fieldName": "code",
+            "hide": false
+          },
+          {
+            "name": "因子值",
+            "type": 0,
+            "link": null,
+            "fieldName": "factors",
+            "hide": false
+          },
+          {
+            "name": "初始资金",
+            "type": 0,
+            "link": null,
+            "fieldName": "start_capital",
+            "hide": true
+          },
+          {
+            "name": "基准指数",
+            "type": 0,
+            "link": null,
+            "fieldName": "standard_symbol",
+            "hide": false
+          },
+          {
+            "name": "佣金率",
+            "type": 0,
+            "link": null,
+            "fieldName": "commission_rate",
+            "hide": true
+          },
+          {
+            "name": "回测频率",
+            "type": 0,
+            "link": null,
+            "fieldName": "frequency",
+            "hide": true
+          },
+          {
+            "name": "回测开始时间",
+            "type": 0,
+            "link": null,
+            "fieldName": "start_date",
+            "hide": true
+          },
+          {
+            "name": "回测结束时间",
+            "type": 0,
+            "link": null,
+            "fieldName": "end_date",
+            "hide": true
+          }
+        ],
+        "outputs": [
+          {
+            "name": "回测id",
+            "type": 0,
+            "links": [
+              7,
+              8
+            ],
+            "fieldName": "backtest_id",
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "策略代码": "# -*- coding: utf-8 -*-\n# P6 波动率目标 —— P1 的第二个候选升级:股票仓位随市场波动自动缩放。\n# 依据:波动率聚集是金融数据最稳健的可预测规律(Moreira-Muir, JF 2017:\n# 按波动缩放敞口改善夏普——它择的是\"波动\"不是\"收益\",与已证死的收益预测无关)。\n# 规则:每月,股票权重 = 40% × clip(目标年化波动16% / 沪深300近60日实际年化波动,\n# 0.4, 1.25);黄金固定20%;余下全给国债。市场狂躁→自动减股,平静→温和加回。\n# 无前视:全部信号用昨收,今开成交。录用标准:两窗\"年化÷回撤\"都优于P1。\nfrom panda_backtest.api.api import *\nfrom panda_backtest.api.stock_api import *\nimport numpy as np\nimport pandas as pd\nimport datetime\n\nEQ, BOND, GOLD = '510300.SH', '511260.SH', '518880.SH'\nBASE_EQ, GOLD_W, TARGET_VOL, VOLD = 0.40, 0.20, 0.16, 60\n\ndef initialize(context):\n    context.hist = {s: [] for s in (EQ, BOND, GOLD)}\n    context.prev_month = None\n\ndef _ann_vol(h):\n    a = np.array(h[-(VOLD + 1):], dtype=float)\n    if len(a) < VOLD + 1 or (a[:-1] <= 0).any():\n        return None\n    return float(np.std(np.diff(a) / a[:-1]) * np.sqrt(244))\n\ndef handle_data(context, bar):\n    acc = context.stock_account_dict['8888']\n    try:\n        dt = datetime.datetime.strptime(str(context.trade_date), '%Y%m%d')\n        cur_month = (dt.year, dt.month)\n    except:\n        cur_month = None\n\n    # ===== 决策:只用截至昨收的 hist =====\n    last = {s: context.hist[s][-1] for s in context.hist if context.hist.get(s)}\n    rebal = cur_month is not None and cur_month != context.prev_month\n    if cur_month is not None:\n        context.prev_month = cur_month\n\n    if rebal:\n        vol = _ann_vol(context.hist.get(EQ, []))\n        if vol and all(s in last for s in (EQ, BOND, GOLD)):\n            scale = min(1.25, max(0.40, TARGET_VOL / vol))\n            w = {EQ: BASE_EQ * scale, GOLD: GOLD_W}\n            w[BOND] = max(0.0, 0.95 - w[EQ] - w[GOLD])\n            total = acc.total_value\n            orders = []\n            for s, wi in w.items():\n                pos = acc.positions.get(s)\n                cur_qty = pos.sellable if pos else 0\n                tgt_qty = int(total * wi / last[s] / 100) * 100\n                delta = tgt_qty - cur_qty\n                if abs(delta) * last[s] < total * 0.02 or abs(delta) < 100:\n                    continue\n                orders.append((s, delta, wi))\n            for s, delta, wi in sorted(orders, key=lambda x: x[1]):\n                if delta < 0:\n                    order_shares('8888', s, delta, style=MarketOrderStyle)\n                    SRLogger.info('波动目标卖出 %s %d股(权重%.0f%%,300波动%.0f%%)' % (s, -delta, wi * 100, vol * 100))\n                elif acc.cash >= delta * last[s]:\n                    order_shares('8888', s, delta, style=MarketOrderStyle)\n                    SRLogger.info('波动目标买入 %s %d股(权重%.0f%%,300波动%.0f%%)' % (s, delta, wi * 100, vol * 100))\n                else:\n                    SRLogger.info('想买 %s 但现金不足' % s)\n\n    # ===== 收盘入库 =====\n    for s in list(context.hist.keys()):\n        try:\n            b = bar[s]\n            if b is None or getattr(b, 'close', None) in (None, 0):\n                continue\n            context.hist[s].append(b.close)\n            if len(context.hist[s]) > 250:\n                context.hist[s] = context.hist[s][-250:]\n        except Exception as e:\n            SRLogger.info('数据异常 %s: %s' % (s, e))\n            continue\n",
+          "初始资金": 1000000,
+          "基准指数": "沪深300",
+          "佣金率": 1,
+          "回测频率": "1d",
+          "回测开始时间": "20250101",
+          "回测结束时间": "20260630"
+        }
+      },
+      {
+        "id": 8,
+        "type": "BackTestResultControl",
+        "title": "回测结果(点开看图)",
+        "pos": [
+          1540,
+          460
+        ],
+        "size": [
+          320,
+          140
+        ],
+        "flags": {
+          "uuid": "4e64cfbb-e0f9-4c40-893f-d23dd40db49f"
+        },
+        "order": 7,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "回测任务",
+            "type": 0,
+            "link": 7,
+            "fieldName": "task_id",
+            "hide": false
+          }
+        ],
+        "outputs": [
+          {
+            "name": "图表绘制",
+            "type": 0,
+            "links": [],
+            "fieldName": "task_id",
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "回测任务": "error"
+        }
+      },
+      {
+        "id": 9,
+        "type": "BacktestSummaryNode",
+        "title": "回测汇总表(自动)",
+        "pos": [
+          1000,
+          1000
+        ],
+        "size": [
+          380,
+          280
+        ],
+        "flags": {
+          "uuid": "1ff3f66f-8cc1-4cdb-b944-197153021bc2"
+        },
+        "order": 8,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "标签(逗号分隔)",
+            "type": 0,
+            "link": null,
+            "fieldName": "labels",
+            "hide": false
+          },
+          {
+            "name": "回测ID1",
+            "type": 0,
+            "link": 2,
+            "fieldName": "back_id_1",
+            "hide": false
+          },
+          {
+            "name": "回测ID2",
+            "type": 0,
+            "link": 4,
+            "fieldName": "back_id_2",
+            "hide": false
+          },
+          {
+            "name": "回测ID3",
+            "type": 0,
+            "link": 6,
+            "fieldName": "back_id_3",
+            "hide": false
+          },
+          {
+            "name": "回测ID4",
+            "type": 0,
+            "link": 8,
+            "fieldName": "back_id_4",
+            "hide": false
+          },
+          {
+            "name": "回测ID5",
+            "type": 0,
+            "link": null,
+            "fieldName": "back_id_5",
+            "hide": false
+          },
+          {
+            "name": "回测ID6",
+            "type": 0,
+            "link": null,
+            "fieldName": "back_id_6",
+            "hide": false
+          }
+        ],
+        "outputs": [
+          {
+            "name": "对比表(Markdown)",
+            "type": 0,
+            "links": [],
+            "fieldName": "summary_md",
+            "slot_index": 0
+          },
+          {
+            "name": "对比数据(JSON)",
+            "type": 0,
+            "links": [],
+            "fieldName": "summary_json",
+            "slot_index": 1
+          }
+        ],
+        "properties": {
+          "标签(逗号分隔)": "P5-训练21H2-24,P5-测试25-26H1,P6-训练21H2-24,P6-测试25-26H1",
+          "回测ID1": "",
+          "回测ID2": "",
+          "回测ID3": "",
+          "回测ID4": "",
+          "回测ID5": "",
+          "回测ID6": ""
+        }
+      }
+    ],
+    "links": [
+      [
+        1,
+        1,
+        0,
+        2,
+        0,
+        0
+      ],
+      [
+        2,
+        1,
+        0,
+        9,
+        1,
+        0
+      ],
+      [
+        3,
+        3,
+        0,
+        4,
+        0,
+        0
+      ],
+      [
+        4,
+        3,
+        0,
+        9,
+        2,
+        0
+      ],
+      [
+        5,
+        5,
+        0,
+        6,
+        0,
+        0
+      ],
+      [
+        6,
+        5,
+        0,
+        9,
+        3,
+        0
+      ],
+      [
+        7,
+        7,
+        0,
+        8,
+        0,
+        0
+      ],
+      [
+        8,
+        7,
+        0,
+        9,
+        4,
+        0
+      ]
+    ],
+    "groups": [
+      {
+        "title": "🧊 冻结代码验证 —— 无任何LLM,固定代码分段复跑;先看v1全区间能否复现319%/1.78",
+        "bounding": [
+          40,
+          0,
+          920,
+          1800
+        ],
+        "color": "#3f5f8f"
+      },
+      {
+        "title": "📊 汇总表(HTML报告也会自动落到 docker/reports/)",
+        "bounding": [
+          960,
+          640,
+          460,
+          400
+        ],
+        "color": "#7f5fa0"
+      }
+    ],
+    "config": {},
+    "extra": {},
+    "version": 0.4
+  }
+}
