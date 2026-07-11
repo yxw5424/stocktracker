@@ -185,6 +185,92 @@ def screen():
     return out
 
 
+# --------------------------------------------------------------------------- #
+# 自选管理 / 行情更新 —— 看板仅有的两类写操作,只碰行情数据;交易类操作依旧没有接口
+# --------------------------------------------------------------------------- #
+import threading
+
+_REFRESH = {"running": False, "total": 0, "done": 0, "added": 0,
+            "current": "", "errors": [], "finished_at": ""}
+
+
+def _market_data():
+    import sys
+    for p in ("/app/panda_quantflow/src", os.path.dirname(os.path.abspath(__file__))):
+        if p and p not in sys.path:
+            sys.path.insert(0, p)
+    import market_data
+    return market_data
+
+
+def _protected_symbols():
+    out = set()
+    for part in os.getenv("ALLOC_WEIGHTS",
+                          "510300.SH:0.40,511260.SH:0.40,518880.SH:0.20").split(","):
+        if ":" in part:
+            out.add(part.rsplit(":", 1)[0].strip())
+    return out
+
+
+def watchlist():
+    try:
+        db = _mongo()
+        md = _market_data()
+        rows = list(db[md.WATCH_COL].find({}, {"_id": 0}).sort("added_at", -1))
+        return {"ok": True, "rows": rows, "protected": sorted(_protected_symbols())}
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}", "rows": []}
+
+
+def watchlist_add(code):
+    try:
+        return _market_data().add_symbol(_mongo(), code)
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+
+def watchlist_remove(symbol):
+    try:
+        return _market_data().remove_symbol(_mongo(), symbol, protected=_protected_symbols())
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+
+def refresh_start():
+    """增量更新库里全部标的(后台线程);已在跑则直接返回状态。"""
+    if _REFRESH["running"]:
+        return dict(_REFRESH)
+
+    def run():
+        try:
+            db = _mongo()
+            md = _market_data()
+            syms = sorted(db["stock_market"].distinct("symbol"))
+            _REFRESH.update({"running": True, "total": len(syms), "done": 0,
+                             "added": 0, "current": "", "errors": [], "finished_at": ""})
+            for sym in syms:
+                _REFRESH["current"] = sym
+                try:
+                    n, _note = md.incremental_update(db, sym)
+                    _REFRESH["added"] += n
+                except Exception as e:
+                    if len(_REFRESH["errors"]) < 10:
+                        _REFRESH["errors"].append(f"{sym}: {e}")
+                _REFRESH["done"] += 1
+        finally:
+            _REFRESH["running"] = False
+            _REFRESH["current"] = ""
+            _REFRESH["finished_at"] = datetime.datetime.now().strftime("%H:%M:%S")
+
+    threading.Thread(target=run, daemon=True).start()
+    _REFRESH["running"] = True
+    return dict(_REFRESH)
+
+
+def refresh_status():
+    return dict(_REFRESH)
+
+
 def detail(symbol):
     """个股详情:250日收盘 + MA20/60/120(对齐日期,不足处为 None)。"""
     out = {"symbol": symbol, "name": "", "dates": [], "closes": [],
@@ -332,6 +418,10 @@ a{color:var(--acc)}.err{color:#ff7b72;font-size:12px;margin-top:6px}
 .newsitem .tag{background:#1c2740;border-radius:4px;padding:1px 6px;font-size:11px;color:#9db2d8;margin-right:8px}
 input[type=text]{background:#0d1320;border:1px solid var(--line);border-radius:6px;color:var(--fg);
       padding:5px 10px;font-size:13px;width:160px}
+button{background:#1d2c49;color:#cfe0ff;border:1px solid #33405c;border-radius:6px;
+      padding:5px 12px;font-size:13px;cursor:pointer}
+button:hover{background:#274068}button:disabled{opacity:.5;cursor:default}
+.chip .x{margin-left:6px;color:#ff9d9d;cursor:pointer}
 code,kbd{background:#0d1320;border:1px solid var(--line);border-radius:4px;padding:1px 6px;font-size:12px}
 .cmd{background:#0d1320;border:1px solid var(--line);border-radius:8px;padding:10px 12px;
      font-family:Consolas,monospace;font-size:12.5px;line-height:1.7;color:#a8c7fa;white-space:pre;overflow-x:auto}
@@ -363,8 +453,8 @@ code,kbd{background:#0d1320;border:1px solid var(--line);border-radius:4px;paddi
     <div class="card link" data-go=system><h2>行情数据截止 →系统</h2><div class=kpi id=k_asof>—</div></div>
   </div>
   <div class=grid>
-    <div class=card full><h2>权益曲线(每日快照,唯一无偏的成绩单)</h2><div id=equity>暂无快照(跑一次 reviewer 生成)</div></div>
-    <div class=card full><h2>今日决策报告 <span id=rname class=pill></span></h2><pre id=report></pre></div>
+    <div class="card full"><h2>权益曲线(每日快照,唯一无偏的成绩单)</h2><div id=equity>暂无快照(跑一次 reviewer 生成)</div></div>
+    <div class="card full"><h2>今日决策报告 <span id=rname class=pill></span></h2><pre id=report></pre></div>
   </div>
 </section>
 
@@ -380,12 +470,22 @@ code,kbd{background:#0d1320;border:1px solid var(--line);border-radius:4px;paddi
     <div class=card><h2>挂单</h2><div id=l_pending></div></div>
     <div class=card><h2>近期成交</h2><div id=l_trades></div></div>
     <div class=card><h2>滑点对账 <span class=sub>正=吃亏</span></h2><div id=l_recon></div></div>
-    <div class=card full><h2>纸面账本(策略应有持仓,与上面实盘对照)</h2><div id=l_ledger></div></div>
+    <div class="card full"><h2>纸面账本(策略应有持仓,与上面实盘对照)</h2><div id=l_ledger></div></div>
   </div>
 </section>
 
 <section id=screen>
-  <div class=card full>
+  <div class="card full" style=margin-bottom:14px>
+    <h2>自选管理 <span class=sub>(加了就自动全量拉数据;更新按钮=增量,只补新交易日,除权自动检测重拉)</span></h2>
+    <div class=chips>
+      <input type=text id=w_code placeholder="代码,如 512480 / 600519">
+      <button id=w_add>＋添加并拉取</button>
+      <button id=w_refresh>⟳ 增量更新全部行情</button>
+      <span id=w_status class=sub></span>
+    </div>
+    <div class=chips id=w_list><span class=sub>加载中…</span></div>
+  </div>
+  <div class="card full">
     <h2>行情·选股 <span class=sub>(库内 <span id=s_count>—</span> 只 · 数据截止 <span id=s_asof>—</span> · 点列头排序,点行看大图)</span></h2>
     <div class=chips id=s_chips>
       <span class="chip on" data-f=all>全部</span>
@@ -401,7 +501,7 @@ code,kbd{background:#0d1320;border:1px solid var(--line);border-radius:4px;paddi
 </section>
 
 <section id=news>
-  <div class=card full>
+  <div class="card full">
     <h2>资讯 <span class=sub>(东财个股新闻,10分钟缓存 · <span id=n_cached></span>)</span></h2>
     <div class=chips id=n_chips></div>
     <div id=n_list>加载中…</div>
@@ -410,7 +510,7 @@ code,kbd{background:#0d1320;border:1px solid var(--line);border-radius:4px;paddi
 
 <section id=ops>
   <div class=grid>
-    <div class=card full><h2>决策记录(最近30条)</h2><div id=o_dec></div></div>
+    <div class="card full"><h2>决策记录(最近30条)</h2><div id=o_dec></div></div>
     <div class=card><h2>对账:实际成交 vs 决策价 <span class=sub>正滑点=吃亏</span></h2><div id=o_recon></div></div>
     <div class=card><h2>沉淀的经验</h2><div id=o_lessons></div></div>
   </div>
@@ -427,7 +527,7 @@ code,kbd{background:#0d1320;border:1px solid var(--line);border-radius:4px;paddi
   <div class=grid>
     <div class=card><h2>现役引擎</h2><div id=y_engine></div></div>
     <div class=card><h2>数据库概况</h2><div id=y_db></div></div>
-    <div class=card full><h2>日常命令速查 <span class=sub>(cmd 窗口,在 docker/ 目录下)</span></h2>
+    <div class="card full"><h2>日常命令速查 <span class=sub>(cmd 窗口,在 docker/ 目录下)</span></h2>
       <div class=cmd>:: ① 更新全部行情(收盘后;幂等,只补新交易日)
 set LOAD_ALL=1
 docker compose run --rm loader
@@ -644,6 +744,51 @@ document.getElementById('s_chips').onclick=e=>{
   renderScreen()};
 document.getElementById('s_q').oninput=e=>{sQ=e.target.value;renderScreen()};
 
+// ---- 自选管理 / 行情更新 ----
+async function loadWatch(){
+  const r=await fetch('/dash/watchlist');const w=await r.json();
+  const box=document.getElementById('w_list');
+  if(!w.ok){box.innerHTML=`<span class=err>${esc(w.error||'')}</span>`;return}
+  box.innerHTML=(w.rows||[]).map(x=>
+    `<span class=chip>${esc(x.name||x.symbol)} <span class=sub>${esc(x.symbol)}</span>`+
+    `<span class=x data-s="${esc(x.symbol)}" title=移除>✕</span></span>`).join('')
+    ||'<span class=sub>还没有手动自选(名单文件里的标的不在这里,由 loader 管理)</span>';
+  box.onclick=async e=>{
+    const s=e.target.dataset&&e.target.dataset.s;if(!s)return;
+    if(!confirm('移除 '+s+' ?(非引擎标的会连行情一起删,可随时重加)'))return;
+    setW('移除中…');
+    const r2=await fetch('/dash/watchlist/remove?symbol='+encodeURIComponent(s),{method:'POST'});
+    const d2=await r2.json();setW(d2.note||d2.error||'');
+    loadWatch();loadScreen(true)};
+}
+function setW(t){document.getElementById('w_status').textContent=t}
+document.getElementById('w_add').onclick=async()=>{
+  const code=document.getElementById('w_code').value.trim();
+  if(!code){setW('先输入代码');return}
+  document.getElementById('w_add').disabled=true;setW('拉取 '+code+' 中…(全量约几秒)');
+  try{
+    const r=await fetch('/dash/watchlist/add?code='+encodeURIComponent(code),{method:'POST'});
+    const d=await r.json();
+    setW(d.ok?`✅ ${d.name||d.symbol} ${d.note||''}`:('❌ '+(d.error||'失败')));
+    if(d.ok){document.getElementById('w_code').value='';loadWatch();loadScreen(true)}
+  }catch(e){setW('❌ '+e)}
+  document.getElementById('w_add').disabled=false};
+document.getElementById('w_code').onkeydown=e=>{if(e.key==='Enter')document.getElementById('w_add').click()};
+let refreshTimer=null;
+document.getElementById('w_refresh').onclick=async()=>{
+  await fetch('/dash/refresh',{method:'POST'});
+  document.getElementById('w_refresh').disabled=true;
+  if(refreshTimer)clearInterval(refreshTimer);
+  refreshTimer=setInterval(async()=>{
+    const s=await(await fetch('/dash/refresh/status')).json();
+    if(s.running){setW(`更新中 ${s.done}/${s.total} ${s.current||''} · 新增${s.added}条`)}
+    else{clearInterval(refreshTimer);refreshTimer=null;
+      document.getElementById('w_refresh').disabled=false;
+      setW(`✅ 更新完成(${s.finished_at||''}):${s.total}只,新增${s.added}条`+
+           (s.errors&&s.errors.length?` · ${s.errors.length}只失败`:''));
+      loadScreen(true);loadOverview()}
+  },2000)};
+
 // ---- 资讯 ----
 let nSym='all',nLoaded=false;
 async function loadNews(force){
@@ -675,7 +820,7 @@ function renderNews(n){
 function go(tab){
   document.querySelectorAll('nav a.tab').forEach(x=>x.classList.toggle('on',x.dataset.t===tab));
   document.querySelectorAll('main section').forEach(x=>x.classList.toggle('on',x.id===tab));
-  if(tab==='screen')loadScreen();
+  if(tab==='screen'){loadScreen();loadWatch()}
   if(tab==='news')loadNews();
   history.replaceState(null,'','#'+tab);
 }

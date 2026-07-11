@@ -27,7 +27,7 @@ RUN pip install anthropic akshare   # akshare: 看板资讯页(个股新闻)用
 
 # 3) 放入 AI 节点 + 安全启动器 + 内置聊天换 Claude 补丁（context = quantflow-integration/）
 COPY ai_advisor_node.py ai_strategy_loop_node.py backtest_summary_node.py /app/panda_quantflow/src/panda_plugins/custom/
-COPY run_local_secure.py dashboard.py /app/panda_quantflow/src/
+COPY run_local_secure.py dashboard.py market_data.py /app/panda_quantflow/src/
 # 看板要用华泰只读客户端;它在 review/ 下,也放进平台 src 让 dashboard 能 import
 COPY review/htsc_broker.py /app/panda_quantflow/src/
 COPY patched/llm-claude.patch /tmp/llm-claude.patch

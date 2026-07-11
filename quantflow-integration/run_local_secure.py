@@ -109,12 +109,39 @@ def build_app():
             sym = request.query_params.get("symbol", "")
             return JSONResponse(await run_in_threadpool(_dash.detail, sym))
 
+        async def _watch_list(request):
+            from fastapi.concurrency import run_in_threadpool
+            return JSONResponse(await run_in_threadpool(_dash.watchlist))
+
+        async def _watch_add(request):
+            from fastapi.concurrency import run_in_threadpool
+            code = request.query_params.get("code", "")
+            return JSONResponse(await run_in_threadpool(_dash.watchlist_add, code))
+
+        async def _watch_remove(request):
+            from fastapi.concurrency import run_in_threadpool
+            sym = request.query_params.get("symbol", "")
+            return JSONResponse(await run_in_threadpool(_dash.watchlist_remove, sym))
+
+        async def _refresh(request):
+            return JSONResponse(_dash.refresh_start())
+
+        async def _refresh_status(request):
+            return JSONResponse(_dash.refresh_status())
+
         app.add_route("/dash", _dash_page, methods=["GET"])
         app.add_route("/dash/data", _dash_data, methods=["GET"])
         app.add_route("/dash/quotes", _dash_quotes, methods=["GET"])
         app.add_route("/dash/news", _dash_news, methods=["GET"])
         app.add_route("/dash/screen", _dash_screen, methods=["GET"])
         app.add_route("/dash/detail", _dash_detail, methods=["GET"])
+        # 唯二写操作:自选管理(增删标的+拉行情)与增量更新;交易类操作没有任何接口。
+        # LocalGuard 已拦截跨站请求,这些 POST 只可能来自本机浏览器。
+        app.add_route("/dash/watchlist", _watch_list, methods=["GET"])
+        app.add_route("/dash/watchlist/add", _watch_add, methods=["POST"])
+        app.add_route("/dash/watchlist/remove", _watch_remove, methods=["POST"])
+        app.add_route("/dash/refresh", _refresh, methods=["POST"])
+        app.add_route("/dash/refresh/status", _refresh_status, methods=["GET"])
         print("  统一工作台 -> http://127.0.0.1:8000/dash")
     except Exception as exc:
         print(f"[warn] /dash 看板挂载失败(不影响平台): {exc}")
