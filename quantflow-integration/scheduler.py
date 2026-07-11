@@ -28,6 +28,8 @@ REPORT_DIR = os.getenv("REPORT_DIR", "/reports")
 JOBS_COL = "scheduler_jobs"
 
 DEFAULT_JOBS = [
+    {"id": "sentinel", "name": "异动哨兵(14:50查实时行情,大跌触发复核)", "task": "sentinel",
+     "time": "14:50", "trading_days_only": True, "enabled": False},
     {"id": "refresh", "name": "行情增量更新", "task": "refresh",
      "time": "15:20", "trading_days_only": True, "enabled": False},
     {"id": "review", "name": "AI复核官(月初再平衡/每日快照)", "task": "review",
@@ -115,7 +117,57 @@ def _task_backup_lite(log):
     log(f"已备份 {sum(len(v) for v in payload.values())} 条记录 -> {path}")
 
 
-_TASKS = {"refresh": _task_refresh, "review": _task_review, "backup_lite": _task_backup_lite}
+def _pick_num(obj, *keys):
+    """在嵌套响应里递归找数值字段(键名匹配)。"""
+    if isinstance(obj, dict):
+        low = {str(k).lower(): v for k, v in obj.items()}
+        for k in keys:
+            v = low.get(k.lower())
+            if isinstance(v, (int, float)) and v > 0:
+                return float(v)
+        for v in obj.values():
+            got = _pick_num(v, *keys)
+            if got:
+                return got
+    elif isinstance(obj, list):
+        for v in obj:
+            got = _pick_num(v, *keys)
+            if got:
+                return got
+    return None
+
+
+def _task_sentinel(log):
+    """异动哨兵:盘中(默认14:50)查沪深300实时报价,单日跌幅超过 SENTINEL_PCT(默认3%)
+    → 立即触发一次复核官运行(agent 收集事实并决定是否报警/建议推迟月初动作)。
+    没有 HT_APIKEY(拿不到实时价)则跳过。这是事件驱动的 agentic 环节:平时沉默。"""
+    if not os.getenv("HT_APIKEY"):
+        log("未配 HT_APIKEY,拿不到实时报价,跳过")
+        return
+    import sys
+    for p in ("/app/panda_quantflow/src",):
+        if p not in sys.path:
+            sys.path.insert(0, p)
+    from htsc_broker import HTSCBroker
+    b = HTSCBroker()
+    resp = b.get_quote("510300", "SH")
+    last = _pick_num(resp, "lastPrice", "last", "price", "currentPrice", "newPrice")
+    pre = _pick_num(resp, "preClose", "preClosePrice", "prevClose", "yesterdayClose")
+    if not last or not pre:
+        log(f"报价解析失败,原始响应前200字:{str(resp)[:200]}")
+        return
+    chg = (last / pre - 1) * 100
+    thresh = float(os.getenv("SENTINEL_PCT", "3"))
+    log(f"沪深300 现价 {last} / 昨收 {pre},日内 {chg:+.2f}%(阈值 -{thresh}%)")
+    if chg <= -thresh:
+        log(f"⚠ 触发异动:跌幅超过 {thresh}%,立即运行复核官收集事实并决策")
+        _task_review(log)
+    else:
+        log("正常,不动")
+
+
+_TASKS = {"refresh": _task_refresh, "review": _task_review,
+          "backup_lite": _task_backup_lite, "sentinel": _task_sentinel}
 
 
 # ---------------- 任务库(Mongo) ----------------

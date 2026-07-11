@@ -58,6 +58,8 @@ services:
       HTSC_LIVE: "${HTSC_LIVE:-0}"
       PROVIDER: "${PROVIDER:-deepseek}"
       FULL_AUTH: "${FULL_AUTH:-0}"
+      AGENT_MODE: "${AGENT_MODE:-single}"           # debate=多头/空头/风控三席辩论后主审裁决
+      SENTINEL_PCT: "${SENTINEL_PCT:-3}"            # 异动哨兵触发阈值(沪深300单日跌幅%)
       BACKTEST_SLIPPAGE: "${BACKTEST_SLIPPAGE:-0}"  # 回测每边滑点比例(0.001=0.1%);平台原硬编码0,偏乐观
       # 代理（可选）：国内直连 api.anthropic.com 不通时，把宿主机代理透传给容器。
       # Docker Desktop(Win/Mac) 用 host.docker.internal 指宿主机，如 http://host.docker.internal:7890
@@ -129,7 +131,9 @@ services:
       MONGO_AUTH_DB: "admin"
       MONGO_DB: "panda"
       PROVIDER: "${PROVIDER:-deepseek}"
-      FULL_AUTH: "${FULL_AUTH:-0}"        # 配置引擎时代默认0:AI只审偏离,不自主开仓(可覆写)
+      FULL_AUTH: "${FULL_AUTH:-0}"
+      AGENT_MODE: "${AGENT_MODE:-single}"           # debate=多头/空头/风控三席辩论后主审裁决
+      SENTINEL_PCT: "${SENTINEL_PCT:-3}"            # 异动哨兵触发阈值(沪深300单日跌幅%)        # 配置引擎时代默认0:AI只审偏离,不自主开仓(可覆写)
       EVAL_DAYS: "${EVAL_DAYS:-5}"
       DEEPSEEK_API_KEY: "${DEEPSEEK_API_KEY:-}"
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"

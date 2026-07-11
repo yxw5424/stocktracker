@@ -404,34 +404,82 @@ def _decide_prompt(sig, ctx, lessons):
     return "\n\n".join(parts)
 
 
+def _llm_json(system, prompt):
+    """单轮 LLM 调用,返回解析后的 JSON dict;无可用 LLM 或失败抛异常。"""
+    if PROVIDER == "claude" and os.getenv("ANTHROPIC_API_KEY"):
+        import anthropic
+        r = anthropic.Anthropic().messages.create(
+            model="claude-opus-4-8", max_tokens=1024,
+            system=system, messages=[{"role": "user", "content": prompt}])
+        txt = "".join(b.text for b in r.content if b.type == "text")
+    elif os.getenv("DEEPSEEK_API_KEY"):
+        import openai
+        cli = openai.OpenAI(api_key=os.getenv("DEEPSEEK_API_KEY"),
+                            base_url="https://api.deepseek.com/v1")
+        r = cli.chat.completions.create(
+            model="deepseek-chat", temperature=0,
+            response_format={"type": "json_object"},
+            messages=[{"role": "system", "content": system},
+                      {"role": "user", "content": prompt}])
+        txt = r.choices[0].message.content
+    else:
+        raise RuntimeError("no-llm")
+    txt = txt.strip()
+    if txt.startswith("```"):
+        txt = txt.strip("`").lstrip("json").strip()
+    return json.loads(txt[txt.index("{"): txt.rindex("}") + 1])
+
+
+def _debate_decide(sig, ctx, lessons):
+    """多智能体辩论复核(AGENT_MODE=debate):多头/空头各陈事实,风控官按清单
+    审查,主审综合三方裁决。角色仍是审偏离/否决——不预测行情(已证伪)。"""
+    facts = (f"信号:{sig['side']} {sig['symbol']} @ {sig['price']},规则:{sig['rule']}\n"
+             f"事实:{json.dumps(ctx, ensure_ascii=False)[:1500]}")
+    debate = {}
+    for role, sys_p in (
+            ("bull", "你是多头分析师。只基于给定事实,列出支持【执行】这笔操作的最强的2-3条理由。"
+                     '输出 JSON:{"points":["..."]}。不许编造事实。'),
+            ("bear", "你是空头分析师。只基于给定事实,列出反对执行/建议谨慎的最强的2-3条理由。"
+                     '输出 JSON:{"points":["..."]}。不许编造事实。'),
+            ("risk", "你是风控官。逐项检查:①标的当日是否异常波动/接近涨跌停 ②成交额是否异常萎缩 "
+                     "③消息面是否有停牌/监管/黑天鹅信号 ④这是再平衡纪律动作还是临时起意。"
+                     '输出 JSON:{"flags":["发现的风险点"],"veto":true/false}。没有确凿风险不许veto。')):
+        try:
+            debate[role] = _llm_json(sys_p, facts)
+        except Exception as e:
+            debate[role] = {"error": f"{type(e).__name__}"}
+    judge_prompt = (f"{facts}\n\n多头观点:{json.dumps(debate.get('bull'), ensure_ascii=False)}\n"
+                    f"空头观点:{json.dumps(debate.get('bear'), ensure_ascii=False)}\n"
+                    f"风控审查:{json.dumps(debate.get('risk'), ensure_ascii=False)}\n"
+                    + (("历史教训:" + ";".join(lessons) + "\n") if lessons else "")
+                    + "作为主审,综合三方给出最终决定。原则:这是配置纪律动作,默认执行;"
+                      "只有风控 veto 或空头给出确凿的执行时机风险(非行情预测)才降级。"
+                      '输出 JSON:{"decision":"执行|半仓|否决","reason":"一句话","confidence":0-1}')
+    try:
+        d = _llm_json(_SYS, judge_prompt)
+        if d.get("decision") not in ("执行", "半仓", "否决"):
+            d["decision"] = "执行"
+        if debate.get("risk", {}).get("veto") and d["decision"] == "执行":
+            d["decision"] = "半仓"                     # 风控veto至少降半仓,主审不能无视
+            d["reason"] = "风控veto:" + str(debate["risk"].get("flags", [])) + ";" + d.get("reason", "")
+        d["debate"] = {k: v for k, v in debate.items()}
+        return d
+    except Exception as e:
+        return {"decision": "执行", "reason": f"辩论复核失败({type(e).__name__}),按规则默认执行",
+                "confidence": 0.3, "debate": debate}
+
+
 def llm_decide(sig, ctx, lessons):
+    if os.getenv("AGENT_MODE", "single").lower() == "debate":
+        return _debate_decide(sig, ctx, lessons)
     prompt = _decide_prompt(sig, ctx, lessons)
     try:
-        if PROVIDER == "claude" and os.getenv("ANTHROPIC_API_KEY"):
-            import anthropic
-            r = anthropic.Anthropic().messages.create(
-                model="claude-opus-4-8", max_tokens=1024,
-                system=_SYS, messages=[{"role": "user", "content": prompt}])
-            txt = "".join(b.text for b in r.content if b.type == "text")
-        elif os.getenv("DEEPSEEK_API_KEY"):
-            import openai
-            cli = openai.OpenAI(api_key=os.getenv("DEEPSEEK_API_KEY"),
-                                base_url="https://api.deepseek.com/v1")
-            r = cli.chat.completions.create(
-                model="deepseek-chat", temperature=0,
-                response_format={"type": "json_object"},
-                messages=[{"role": "system", "content": _SYS},
-                          {"role": "user", "content": prompt}])
-            txt = r.choices[0].message.content
-        else:
-            return {"decision": "执行", "reason": "无可用 LLM(mock):按规则默认执行", "confidence": 0.5}
-        txt = txt.strip()
-        if txt.startswith("```"):
-            txt = txt.strip("`").lstrip("json").strip()
-        d = json.loads(txt[txt.index("{"): txt.rindex("}") + 1])
+        d = _llm_json(_SYS, prompt)
         if d.get("decision") not in ("执行", "半仓", "否决"):
             d["decision"] = "执行"
         return d
+    except RuntimeError:
+        return {"decision": "执行", "reason": "无可用 LLM(mock):按规则默认执行", "confidence": 0.5}
     except Exception as e:
         return {"decision": "执行", "reason": f"复核失败({type(e).__name__}),按规则默认执行", "confidence": 0.3}
 
@@ -735,7 +783,8 @@ def main():
             "date": today, "symbol": sig["symbol"], "side": sig["side"],
             "price": sig["price"], "rule": sig["rule"], "context": ctx,
             "decision": d["decision"], "reason": d.get("reason", ""),
-            "confidence": d.get("confidence"), "evaluated": False})
+            "confidence": d.get("confidence"), "evaluated": False,
+            "debate": d.get("debate")})
         # 虚拟账本(纸面):执行/半仓的买入入账,执行的卖出出账
         if engine == "alloc_p1":
             # 配置引擎:账本按 qty 增减(半仓=执行一半的调仓量)
@@ -765,8 +814,13 @@ def main():
         icon = {"执行": "✅", "半仓": "🌓", "否决": "⛔"}[d["decision"]]
         lines += [f"### {icon} {sig['side']} {sig['symbol']} @ {sig['price']}",
                   f"- 触发规则:{sig['rule']}",
-                  f"- 关键事实:{json.dumps(ctx, ensure_ascii=False)[:400]}",
-                  f"- **AI 决定:{d['decision']}**(信心 {d.get('confidence')}) —— {d.get('reason','')}"]
+                  f"- 关键事实:{json.dumps(ctx, ensure_ascii=False)[:400]}"]
+        if d.get("debate"):
+            dbt = d["debate"]
+            lines += [f"- 🐂 多头:{json.dumps(dbt.get('bull', {}).get('points', dbt.get('bull')), ensure_ascii=False)[:200]}",
+                      f"- 🐻 空头:{json.dumps(dbt.get('bear', {}).get('points', dbt.get('bear')), ensure_ascii=False)[:200]}",
+                      f"- 🛡️ 风控:{json.dumps(dbt.get('risk'), ensure_ascii=False)[:200]}"]
+        lines.append(f"- **AI 决定:{d['decision']}**(信心 {d.get('confidence')}) —— {d.get('reason','')}")
         if d["decision"] in ("执行", "半仓"):
             ob = broker_order(sig["side"], sig["symbol"], sig["price"], lines,
                               half=(d["decision"] == "半仓"), qty=sig.get("qty"))
