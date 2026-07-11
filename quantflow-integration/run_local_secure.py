@@ -169,10 +169,24 @@ def build_app():
                 return JSONResponse(await run_in_threadpool(
                     _sched.job_log, request.query_params.get("id", "")))
 
+            async def _jobs_create(request):
+                from fastapi.concurrency import run_in_threadpool
+                q = request.query_params
+                return JSONResponse(await run_in_threadpool(
+                    _sched.job_create, q.get("name", ""), q.get("time", "09:35"),
+                    q.get("prompt", ""), q.get("symbol", ""), q.get("trading_days_only", "1")))
+
+            async def _jobs_delete(request):
+                from fastapi.concurrency import run_in_threadpool
+                return JSONResponse(await run_in_threadpool(
+                    _sched.job_delete, request.query_params.get("id", "")))
+
             app.add_route("/dash/jobs", _jobs, methods=["GET"])
             app.add_route("/dash/jobs/update", _jobs_update, methods=["POST"])
             app.add_route("/dash/jobs/run", _jobs_run, methods=["POST"])
             app.add_route("/dash/jobs/log", _jobs_log, methods=["GET"])
+            app.add_route("/dash/jobs/create", _jobs_create, methods=["POST"])
+            app.add_route("/dash/jobs/delete", _jobs_delete, methods=["POST"])
         except Exception as exc:
             print(f"[warn] Routine 调度器未启动(不影响平台): {exc}")
         print("  统一工作台 -> http://127.0.0.1:8000/dash")

@@ -288,7 +288,12 @@ def patched_dashboard(tmp_reports):
         {"id": "backup", "name": "轻量备份(决策/权益/对账→/reports/backups)", "task": "backup_lite",
          "time": "20:00", "trading_days_only": False, "enabled": True,
          "last_run": "2026-07-10 20:00:01", "last_status": "ok", "last_duration_s": 0.4,
-         "last_log": "20:00:01 已备份 512 条记录 -> /reports/backups/core_20260710_2000.json.gz"}]
+         "last_log": "20:00:01 已备份 512 条记录 -> /reports/backups/core_20260710_2000.json.gz"},
+        {"id": "agent_0710093000", "name": "华虹阶段分析", "task": "agent_prompt",
+         "time": "09:35", "trading_days_only": True, "enabled": True, "custom": True,
+         "symbol": "688347.SH", "prompt": "从慢频率视角分析华虹当前位置,复盘上次观点",
+         "last_run": "2026-07-10 09:35:04", "last_status": "ok", "last_duration_s": 18.2,
+         "last_log": "记忆文件:/reports/agent_memory/agent_0710093000.md\n## 复盘\n上次判断'接近MA60支撑'已验证…"}]
     dash._DEV_JOBS = jobs
 
     def jobs_list():
@@ -318,7 +323,20 @@ def patched_dashboard(tmp_reports):
                 return {"ok": True, "id": jid, "log": j.get("last_log", ""), "status": j.get("last_status", "")}
         return {"ok": False, "error": "不存在"}
 
-    dash._dev_jobs_api = (jobs_list, job_update, job_run_now, job_log)
+    def job_create(name, time_str, prompt_txt, symbol, tdo):
+        jid = "agent_dev%d" % (len(jobs))
+        jobs.append({"id": jid, "name": name, "task": "agent_prompt", "time": time_str,
+                     "prompt": prompt_txt, "symbol": symbol, "custom": True,
+                     "trading_days_only": tdo in ("1", True, "true"), "enabled": True})
+        return {"ok": True, "id": jid}
+
+    def job_delete(jid):
+        if not jid.startswith("agent_"):
+            return {"ok": False, "error": "内置任务不可删除"}
+        jobs[:] = [j for j in jobs if j["id"] != jid]
+        return {"ok": True}
+
+    dash._dev_jobs_api = (jobs_list, job_update, job_run_now, job_log, job_create, job_delete)
 
     # 资讯:预填缓存,离线可用
     now = __import__("time").time()
@@ -397,6 +415,12 @@ def serve(port=18200):
                 self._json(dash._dev_jobs_api[1](q.get("id", ""), q.get("enabled"), q.get("time")))
             elif u.path == "/dash/jobs/run":
                 self._json(dash._dev_jobs_api[2](q.get("id", "")))
+            elif u.path == "/dash/jobs/create":
+                self._json(dash._dev_jobs_api[4](q.get("name", ""), q.get("time", ""),
+                                                 q.get("prompt", ""), q.get("symbol", ""),
+                                                 q.get("trading_days_only", "1")))
+            elif u.path == "/dash/jobs/delete":
+                self._json(dash._dev_jobs_api[5](q.get("id", "")))
             else:
                 self.send_response(404); self.end_headers()
 

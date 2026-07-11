@@ -166,6 +166,111 @@ def _task_sentinel(log):
         log("正常,不动")
 
 
+# ---------------- 自定义 Agent 任务(用户在前端创建:时间+提示词+可选聚焦个股) ----------------
+MEM_DIR = os.path.join(REPORT_DIR, "agent_memory")
+
+_AGENT_SYS = (
+    "你是慢频率(周/月级)投资分析师,服务一个以配置为主、极低换手的个人系统。"
+    "只基于【数据快照】里给出的事实分析,严格区分事实与观点。你的产出:"
+    "①市场阶段的事实描述(指数与均线关系、涨跌家数分布等,不预测明天);"
+    "②哪些标的接近【可验证的参考位】——如'跌破MA120''距60日高-15%''20日涨幅过大(反转风险)',"
+    "每条必须引用快照里的数字;③若有既往分析记录,先复盘:上次的观点被事实验证了还是打脸了,"
+    "明确写出修正。禁止:荐股式喊单、预测短期涨跌、编造快照里没有的数据。"
+    "输出 markdown,简洁,先结论后依据。")
+
+
+def _llm_text(prompt):
+    provider = os.getenv("PROVIDER", "deepseek").lower()
+    if provider == "claude" and os.getenv("ANTHROPIC_API_KEY"):
+        import anthropic
+        r = anthropic.Anthropic().messages.create(
+            model="claude-opus-4-8", max_tokens=2000,
+            system=_AGENT_SYS, messages=[{"role": "user", "content": prompt}])
+        return "".join(b.text for b in r.content if b.type == "text")
+    if os.getenv("DEEPSEEK_API_KEY"):
+        import openai
+        cli = openai.OpenAI(api_key=os.getenv("DEEPSEEK_API_KEY"),
+                            base_url="https://api.deepseek.com/v1")
+        r = cli.chat.completions.create(
+            model="deepseek-chat", temperature=0.2,
+            messages=[{"role": "system", "content": _AGENT_SYS},
+                      {"role": "user", "content": prompt}])
+        return r.choices[0].message.content
+    raise RuntimeError("没有可用的 LLM key(DEEPSEEK_API_KEY/ANTHROPIC_API_KEY)")
+
+
+def _gather_agent_context(job, log):
+    """自动喂料:行情指标快照+持仓+聚焦个股新闻+实时报价(如有key)。"""
+    import dashboard
+    ctx = {}
+    try:
+        scr = dashboard.screen()
+        ctx["数据截止"] = scr.get("asof", "")
+        keep = ("symbol", "name", "price", "r1", "r20", "r60", "vol60",
+                "ma20", "ma60", "ma120", "dd60")
+        ctx["全库指标"] = [{k: r.get(k) for k in keep} for r in scr.get("rows", [])[:40]]
+    except Exception as e:
+        log(f"行情快照失败:{e}")
+    try:
+        db = _mongo()
+        ctx["纸面持仓"] = list(db["ai_review_positions"].find({}, {"_id": 0}))
+    except Exception:
+        pass
+    sym = (job.get("symbol") or "").strip().upper()
+    if sym:
+        focus = [r for r in ctx.get("全库指标", []) if r.get("symbol") == sym]
+        ctx["聚焦标的"] = focus[0] if focus else f"{sym}(不在库中,先在行情·选股页添加)"
+        try:
+            import dashboard as _d
+            ctx["聚焦新闻"] = [{k: n.get(k) for k in ("time", "title", "source")}
+                               for n in _d.news(sym).get("rows", [])[:8]]
+        except Exception:
+            pass
+    if os.getenv("HT_APIKEY"):
+        try:
+            import sys
+            for p in ("/app/panda_quantflow/src",):
+                if p not in sys.path:
+                    sys.path.insert(0, p)
+            from htsc_broker import HTSCBroker
+            b = HTSCBroker()
+            q = b.get_quote("510300", "SH")
+            last = _pick_num(q, "lastPrice", "last", "price", "currentPrice")
+            pre = _pick_num(q, "preClose", "preClosePrice", "prevClose")
+            if last and pre:
+                ctx["沪深300实时"] = {"现价": last, "昨收": pre, "日内%": round((last / pre - 1) * 100, 2)}
+            if sym and "." in sym:
+                code, ex = sym.split(".")
+                q2 = b.get_quote(code, ex)
+                l2, p2 = _pick_num(q2, "lastPrice", "last", "price"), _pick_num(q2, "preClose", "prevClose")
+                if l2 and p2:
+                    ctx["聚焦实时"] = {"现价": l2, "昨收": p2, "日内%": round((l2 / p2 - 1) * 100, 2)}
+        except Exception as e:
+            log(f"实时报价失败(用日线数据继续):{e}")
+    return ctx
+
+
+def _task_agent(job, log):
+    os.makedirs(MEM_DIR, exist_ok=True)
+    mem_path = os.path.join(MEM_DIR, f"{job['id']}.md")
+    memory = ""
+    if os.path.exists(mem_path):
+        memory = open(mem_path, encoding="utf-8").read()[-4000:]
+    ctx = _gather_agent_context(job, log)
+    prompt = (f"【任务指令】{job.get('prompt', '')}\n\n"
+              f"【数据快照】\n{json.dumps(ctx, ensure_ascii=False, default=str)[:9000]}\n\n"
+              f"【你此前的分析记录(最近部分)】\n{memory or '(首次运行,无历史)'}")
+    out = _llm_text(prompt)
+    stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    with open(mem_path, "a", encoding="utf-8") as f:
+        if not memory:
+            f.write(f"# Agent记忆:{job.get('name', job['id'])}\n")
+        f.write(f"\n\n## {stamp}\n\n{out}\n")
+    log(f"记忆文件:/reports/agent_memory/{job['id']}.md(网页可直接打开)")
+    for line in out.splitlines():
+        log(line)
+
+
 _TASKS = {"refresh": _task_refresh, "review": _task_review,
           "backup_lite": _task_backup_lite, "sentinel": _task_sentinel}
 
@@ -221,7 +326,10 @@ def _run_job(job):
     t0 = time.time()
     try:
         with _LOCK:
-            _TASKS[job["task"]](log)
+            if job.get("task") == "agent_prompt":
+                _task_agent(job, log)
+            else:
+                _TASKS[job["task"]](log)
         status = "ok"
     except Exception as e:
         status = "fail"
@@ -232,6 +340,36 @@ def _run_job(job):
         "last_duration_s": round(time.time() - t0, 1),
         "last_log": "\n".join(logs)[-6000:]}})
     return status
+
+
+def job_create(name, time_str, prompt, symbol="", trading_days_only=True):
+    """前端创建自定义 Agent 任务。"""
+    try:
+        if not name or not prompt:
+            return {"ok": False, "error": "名称和提示词不能为空"}
+        hh, mm = time_str.strip().split(":")
+        db = _mongo()
+        jid = "agent_" + datetime.datetime.now().strftime("%m%d%H%M%S")
+        job = {"id": jid, "name": name.strip(), "task": "agent_prompt",
+               "time": f"{int(hh):02d}:{int(mm):02d}",
+               "prompt": prompt.strip(), "symbol": (symbol or "").strip().upper(),
+               "trading_days_only": trading_days_only in (True, "1", "true"),
+               "enabled": True, "custom": True}
+        db[JOBS_COL].update_one({"id": jid}, {"$set": job}, upsert=True)
+        return {"ok": True, "id": jid}
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+
+def job_delete(jid):
+    """只允许删除用户创建的 agent_ 任务;内置任务只能停用。"""
+    try:
+        if not str(jid).startswith("agent_"):
+            return {"ok": False, "error": "内置任务不可删除(可停用)"}
+        _mongo()[JOBS_COL].delete_one({"id": jid})
+        return {"ok": True, "id": jid}
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
 
 def job_run_now(jid):

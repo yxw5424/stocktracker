@@ -525,7 +525,8 @@ code,kbd{background:#0d1320;border:1px solid var(--line);border-radius:4px;paddi
 
 <section id=system>
   <div class=grid>
-    <div class="card full"><h2>定时任务(Routine) <span class=sub id=j_state></span></h2>
+    <div class="card full"><h2>定时任务(Routine) <span class=sub id=j_state></span>
+      <button id=j_new style=float:right>＋新建Agent任务</button></h2>
       <div id=j_table>加载中…</div>
       <pre id=j_log style="display:none;margin-top:10px;max-height:280px;overflow:auto"></pre>
     </div>
@@ -828,13 +829,17 @@ async function loadJobs(){
   st.textContent=j.scheduler_on?'(调度器运行中·任务默认停用,想自动化就打开开关)':'(调度器已被 SCHEDULER=0 停用)';
   const rows=(j.rows||[]).map(x=>{
     const ic={ok:'✅',fail:'❌',running:'⏳'}[x.last_status]||'—';
-    return `<tr><td class=l><b>${esc(x.name)}</b></td>`+
+    const isAgent=x.task==='agent_prompt';
+    const extra=(isAgent?` <a href="/reports/agent_memory/${esc(x.id)}.md" target=_blank>记忆</a>`+
+      ` <button class=jdel data-id="${esc(x.id)}">删除</button>`:'');
+    const nm=isAgent?`🤖 ${esc(x.name)}<div class=sub title="${esc(x.prompt||'')}">${esc((x.prompt||'').slice(0,46))}${(x.prompt||'').length>46?'…':''}${x.symbol?' · 聚焦'+esc(x.symbol):''}</div>`:`<b>${esc(x.name)}</b>`;
+    return `<tr><td class=l>${nm}</td>`+
       `<td><a href=# class=jtime data-id="${esc(x.id)}" data-t="${esc(x.time)}">${esc(x.time)}</a></td>`+
       `<td>${x.trading_days_only?'仅交易日':'每天'}</td>`+
       `<td><button class=jtoggle data-id="${esc(x.id)}" data-en="${x.enabled?1:0}">${x.enabled?'🟢 开':'⚪ 关'}</button></td>`+
       `<td class=l>${esc(x.last_run||'—')} ${ic} <span class=sub>${x.last_duration_s?x.last_duration_s+'s':''}</span></td>`+
       `<td><button class=jrun data-id="${esc(x.id)}">立即运行</button> `+
-      `<button class=jlog data-id="${esc(x.id)}">日志</button></td></tr>`}).join('');
+      `<button class=jlog data-id="${esc(x.id)}">日志</button>${extra}</td></tr>`}).join('');
   document.getElementById('j_table').innerHTML=
     `<table><tr><th class=l>任务</th><th>时间</th><th>日历</th><th>开关</th><th class=l>上次运行</th><th>操作</th></tr>${rows}</table>`;
   document.querySelectorAll('.jtoggle').forEach(b=>b.onclick=async()=>{
@@ -851,7 +856,22 @@ async function loadJobs(){
     const t=prompt('执行时间(HH:MM,24小时制)',a.dataset.t);
     if(t&&/^\d{1,2}:\d{2}$/.test(t.trim()))
       fetch(`/dash/jobs/update?id=${a.dataset.id}&time=${encodeURIComponent(t.trim())}`,{method:'POST'}).then(loadJobs)});
+  document.querySelectorAll('.jdel').forEach(b=>b.onclick=async()=>{
+    if(!confirm('删除这个Agent任务?(记忆文件保留在 reports/agent_memory/)'))return;
+    await fetch(`/dash/jobs/delete?id=${b.dataset.id}`,{method:'POST'});loadJobs()});
 }
+document.getElementById('j_new').onclick=async()=>{
+  const name=prompt('任务名称(如:早盘阶段分析)');if(!name)return;
+  const time=prompt('执行时间 HH:MM(如 09:35;尾盘复盘用 14:50)','09:35');if(!time)return;
+  const p=prompt('给Agent的提示词(它会自动带上行情快照/持仓/该任务的记忆文件):\\n例:从慢频率视角分析当前市场阶段,指出哪些标的接近可验证的买卖参考位;先复盘你上次的观点');
+  if(!p)return;
+  const sym=prompt('聚焦个股代码(可留空=全市场视角;如 688347.SH)','')||'';
+  const td=confirm('仅交易日运行?(确定=是,取消=每天)');
+  const r=await fetch(`/dash/jobs/create?name=${encodeURIComponent(name)}&time=${encodeURIComponent(time)}`+
+    `&prompt=${encodeURIComponent(p)}&symbol=${encodeURIComponent(sym)}&trading_days_only=${td?'1':'0'}`,{method:'POST'});
+  const d=await r.json();
+  if(!d.ok)alert(d.error||'创建失败');
+  loadJobs()};
 
 // ---- 导航 ----
 function go(tab){

@@ -98,6 +98,13 @@ def main():
         chk("任务-立即运行", "2026-07-11 09:00:00" in pg.inner_text("#j_table"), pg.inner_text("#j_table")[:200])
         pg.click(".jlog[data-id=backup]"); pg.wait_for_timeout(200)
         chk("任务-日志", "core_20260710" in pg.inner_text("#j_log"))
+        # 自定义 Agent 任务:显示/记忆链接/新建/删除
+        chk("Agent-行", "华虹阶段分析" in pg.inner_text("#j_table") and "聚焦688347.SH" in pg.inner_text("#j_table"))
+        chk("Agent-记忆链接", "agent_memory/agent_0710093000.md" in pg.inner_html("#j_table"))
+        answers = iter(["尾盘复盘", "14:50", "复盘今早观点,对照当日事实修正", ""])
+        pg.on("dialog", lambda d: d.accept(next(answers, "")) if d.type == "prompt" else d.accept())
+        pg.click("#j_new"); pg.wait_for_timeout(500)
+        chk("Agent-新建", "尾盘复盘" in pg.inner_text("#j_table"), pg.inner_text("#j_table")[:300])
         shot("08_system.png")
         b.close()
 
