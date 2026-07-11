@@ -1,0 +1,1044 @@
+{
+  "format_version": "1.0",
+  "name": "ETF走查:规则池×月频长动量×大盘闸门(训练/测试分窗)",
+  "description": "结构性升级的无前视走查。池子按规则选(2021前上市+流动性+资产类别分散,含债/金/红利/海外,见 watchlist-etf-broad.txt,须先灌数据:ASSET_TYPE=etf WATCHLIST_FILE=/data/watchlist-etf-broad.txt ETF20=159915 START_DATE=20210601,再重启quantflow)。E=月频+60/120混合动量+沪深300的MA120闸门;F=E去掉闸门(隔离闸门价值);G=周频20日动量老结构(隔离池子价值)。训练窗21H2-24(前~半年为预热)、测试窗25-26H1(E/F前~120交易日预热,几乎空仓,属正常)。纪律:只许按训练窗结果挑变体/调参;测试窗每个变体只看一次,看完不许回头改参数再看——否则测试窗就被污染成第二个训练窗(选择偏差)。",
+  "litegraph": {
+    "last_node_id": 13,
+    "last_link_id": 12,
+    "nodes": [
+      {
+        "id": 1,
+        "type": "StockBacktestControl",
+        "title": "E 月频·60/120动量·大盘闸门 · 训练21H2-24",
+        "pos": [
+          80,
+          40
+        ],
+        "size": [
+          420,
+          340
+        ],
+        "flags": {
+          "uuid": "e7e1e2a2-40a0-4826-80bc-f25b34803d25"
+        },
+        "order": 0,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "策略代码",
+            "type": 0,
+            "link": null,
+            "fieldName": "code",
+            "hide": false
+          },
+          {
+            "name": "因子值",
+            "type": 0,
+            "link": null,
+            "fieldName": "factors",
+            "hide": false
+          },
+          {
+            "name": "初始资金",
+            "type": 0,
+            "link": null,
+            "fieldName": "start_capital",
+            "hide": true
+          },
+          {
+            "name": "基准指数",
+            "type": 0,
+            "link": null,
+            "fieldName": "standard_symbol",
+            "hide": false
+          },
+          {
+            "name": "佣金率",
+            "type": 0,
+            "link": null,
+            "fieldName": "commission_rate",
+            "hide": true
+          },
+          {
+            "name": "回测频率",
+            "type": 0,
+            "link": null,
+            "fieldName": "frequency",
+            "hide": true
+          },
+          {
+            "name": "回测开始时间",
+            "type": 0,
+            "link": null,
+            "fieldName": "start_date",
+            "hide": true
+          },
+          {
+            "name": "回测结束时间",
+            "type": 0,
+            "link": null,
+            "fieldName": "end_date",
+            "hide": true
+          }
+        ],
+        "outputs": [
+          {
+            "name": "回测id",
+            "type": 0,
+            "links": [
+              1,
+              2
+            ],
+            "fieldName": "backtest_id",
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "策略代码": "# -*- coding: utf-8 -*-\n# 无前视动量轮动·参数化模板 —— v2_clean 崩盘(全区间-49%DD)后的防抖动改造底座。\n# 诊断:信号晚一天(实盘现实)时,高换手的\"追高杀跌\"磨损吃掉全部利润;\n# 对策全在 CFG 里,各变体只改 CFG,由 flows/a3-anti-whipsaw-flow.json 对比:\n#   exit_buffer  卖出缓冲:昨收 < MA(exit_ma)×(1-buffer) 才卖(防贴线抖动)\n#   trail        高点回撤止损阈值\n#   keep_rank    排名滞回:已持仓跌出前 keep_rank 名才调仓卖出(买入仍只买前 top_n)\n#   rebal        'W'=每周一 / 'W2'=隔周周一 / 'M'=每月首个交易日\n#   mom_days/mom2_days  动量窗口;mom2_days>0 时得分=两窗口动量均值(长短混合)\n#   regime_symbol/regime_ma  大盘闸门:该标的昨收低于其MA时禁止开新仓(0=关闭)\n#   pyramid      True=调仓日对已持仓的领先者继续加码(v1旧行为)\n# 决策只用截至昨收的 context.hist,当日收盘在 handle_data 末尾才入库 —— 无前视。\nfrom panda_backtest.api.api import *\nfrom panda_backtest.api.stock_api import *\nimport numpy as np\nimport pandas as pd\nimport datetime\n\nCFG = {'exit_ma': 20, 'exit_buffer': 0.02, 'trail': 0.10,\n       'mom_days': 60, 'mom2_days': 120, 'ma_filter': 60, 'top_n': 3, 'keep_rank': 5,\n       'rebal': 'M', 'regime_symbol': '510300.SH', 'regime_ma': 120, 'pyramid': False}\n\ndef initialize(context):\n    context.universe = ['510300.SH', '510500.SH', '159915.SZ', '588000.SH', '512760.SH', '515070.SH', '512690.SH', '512800.SH', '510880.SH', '515790.SH', '512660.SH', '512170.SH', '518880.SH', '511260.SH', '513100.SH', '510900.SH']\n    context.hist = {s: [] for s in context.universe}\n    if CFG['regime_symbol'] and CFG['regime_symbol'] not in context.hist:\n        context.hist[CFG['regime_symbol']] = []\n    context.hold = set()\n    context.max_price = {}\n    context.buy_day = 0  # 周一:用上周五收盘信号,周一开盘成交(对齐实盘)\n    context.prev_month = None\n\ndef _rank(context, last):\n    \"\"\"按动量排序的候选表 [(sym, score), ...],只含通过过滤的。\"\"\"\n    need = max(CFG['ma_filter'], CFG['mom_days'], CFG['mom2_days'])\n    out = []\n    for s in context.universe:\n        h = context.hist.get(s, [])\n        if s not in last or len(h) < need:\n            continue\n        p0 = h[-CFG['mom_days']]\n        if not p0:\n            continue\n        mom = last[s] / p0 - 1\n        if CFG['mom2_days']:\n            p1 = h[-CFG['mom2_days']]\n            if not p1:\n                continue\n            mom = (mom + (last[s] / p1 - 1)) / 2.0\n        if mom <= 0:\n            continue\n        if last[s] <= sum(h[-CFG['ma_filter']:]) / CFG['ma_filter']:\n            continue\n        out.append((s, mom))\n    out.sort(key=lambda x: x[1], reverse=True)\n    return out\n\ndef _regime_ok(context):\n    \"\"\"大盘闸门:闸门标的昨收 > 其MA(regime_ma) 才允许开新仓。关闭时恒True。\"\"\"\n    if not CFG['regime_ma'] or not CFG['regime_symbol']:\n        return True\n    h = context.hist.get(CFG['regime_symbol'], [])\n    if len(h) < CFG['regime_ma']:\n        return False   # 预热期不开仓(保守)\n    return h[-1] > sum(h[-CFG['regime_ma']:]) / CFG['regime_ma']\n\ndef handle_data(context, bar):\n    acc = context.stock_account_dict['8888']\n    try:\n        dt = datetime.datetime.strptime(str(context.trade_date), '%Y%m%d')\n        weekday, week_no = dt.weekday(), dt.isocalendar()[1]\n    except:\n        weekday, week_no = -1, 0\n\n    # ===== 决策阶段:只用截至昨收的 hist =====\n    last = {s: context.hist[s][-1] for s in context.hist if context.hist.get(s)}\n\n    # 每日退出:MA 破位带缓冲 + 高点回撤\n    for s in list(context.hold):\n        if s not in last:\n            continue\n        h = context.hist.get(s, [])\n        if len(h) < CFG['exit_ma']:\n            continue\n        px = last[s]\n        ma = sum(h[-CFG['exit_ma']:]) / CFG['exit_ma']\n        sold = False\n        if px < ma * (1 - CFG['exit_buffer']):\n            pos = acc.positions.get(s)\n            if pos and pos.sellable > 0:\n                order_shares('8888', s, -pos.sellable, style=MarketOrderStyle)\n                context.hold.discard(s)\n                context.max_price.pop(s, None)\n                SRLogger.info('卖出 %s (昨收破MA%d带%.0f%%缓冲)' % (s, CFG['exit_ma'], CFG['exit_buffer'] * 100))\n                sold = True\n        if sold:\n            continue\n        mx = context.max_price.get(s, px)\n        if px > mx:\n            context.max_price[s] = px\n        elif mx > 0 and (mx - px) / mx >= CFG['trail']:\n            pos = acc.positions.get(s)\n            if pos and pos.sellable > 0:\n                order_shares('8888', s, -pos.sellable, style=MarketOrderStyle)\n                context.hold.discard(s)\n                context.max_price.pop(s, None)\n                SRLogger.info('卖出 %s (较高点回撤%.0f%%)' % (s, CFG['trail'] * 100))\n\n    # 调仓日:W=每周一 / W2=隔周周一 / M=每月首个交易日\n    if CFG['rebal'] == 'M':\n        cur_month = (dt.year, dt.month) if weekday >= 0 else None\n        rebal = cur_month is not None and cur_month != context.prev_month\n        if cur_month is not None:\n            context.prev_month = cur_month\n    elif CFG['rebal'] == 'W2':\n        rebal = (weekday == context.buy_day) and week_no % 2 == 0\n    else:\n        rebal = (weekday == context.buy_day)\n    if rebal:\n        ranked = _rank(context, last)\n        order = [s for s, _ in ranked]\n        top_buy = order[:CFG['top_n']]\n        keep = set(order[:max(CFG['keep_rank'], CFG['top_n'])])\n\n        # 滞回卖出:已持仓跌出前 keep_rank 名才卖(不是跌出 top_n 就卖)\n        for s in list(context.hold):\n            if s not in keep:\n                pos = acc.positions.get(s)\n                if pos and pos.sellable > 0:\n                    order_shares('8888', s, -pos.sellable, style=MarketOrderStyle)\n                    context.hold.discard(s)\n                    context.max_price.pop(s, None)\n                    SRLogger.info('卖出 %s (跌出前%d名)' % (s, CFG['keep_rank']))\n\n        # 买入:大盘闸门放行才开新仓;只补空出的仓位;pyramid=False 时跳过已持仓\n        if not _regime_ok(context):\n            top_buy = []\n            SRLogger.info('大盘闸门关闭(%s 低于MA%d),本期不开新仓' % (CFG['regime_symbol'], CFG['regime_ma']))\n        targets = [s for s in top_buy if CFG['pyramid'] or s not in context.hold]\n        room = max(CFG['top_n'] - (0 if CFG['pyramid'] else len(context.hold)), 0)\n        targets = targets[:room] if not CFG['pyramid'] else targets\n        if targets:\n            budget_per = acc.total_value * 0.95 / CFG['top_n']\n            for s in targets:\n                if s not in last:\n                    continue\n                qty = int(budget_per / last[s] / 100) * 100\n                if qty >= 100 and acc.cash >= qty * last[s]:\n                    order_shares('8888', s, qty, style=MarketOrderStyle)\n                    context.hold.add(s)\n                    context.max_price[s] = last[s]\n                    SRLogger.info('买入 %s %d股 (按昨收%.3f定量)' % (s, qty, last[s]))\n                else:\n                    SRLogger.info('想买 %s 但资金不足或不足100股' % s)\n\n    # ===== 收盘入库:今天的收盘价此刻才可见于下个交易日(含闸门标的) =====\n    for s in list(context.hist.keys()):\n        try:\n            b = bar[s]\n            if b is None or getattr(b, 'close', None) in (None, 0):\n                continue\n            context.hist[s].append(b.close)\n            if len(context.hist[s]) > 250:\n                context.hist[s] = context.hist[s][-250:]\n        except Exception as e:\n            SRLogger.info('数据异常 %s: %s' % (s, e))\n            continue\n",
+          "初始资金": 1000000,
+          "基准指数": "沪深300",
+          "佣金率": 1,
+          "回测频率": "1d",
+          "回测开始时间": "20210701",
+          "回测结束时间": "20241231"
+        }
+      },
+      {
+        "id": 2,
+        "type": "BackTestResultControl",
+        "title": "回测结果(点开看图)",
+        "pos": [
+          560,
+          40
+        ],
+        "size": [
+          320,
+          140
+        ],
+        "flags": {
+          "uuid": "1d6e5e84-69bb-4f01-9e0d-c5c74e74aed7"
+        },
+        "order": 1,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "回测任务",
+            "type": 0,
+            "link": 1,
+            "fieldName": "task_id",
+            "hide": false
+          }
+        ],
+        "outputs": [
+          {
+            "name": "图表绘制",
+            "type": 0,
+            "links": [],
+            "fieldName": "task_id",
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "回测任务": "error"
+        }
+      },
+      {
+        "id": 3,
+        "type": "StockBacktestControl",
+        "title": "E 月频·60/120动量·大盘闸门 · 测试25-26H1",
+        "pos": [
+          1060,
+          40
+        ],
+        "size": [
+          420,
+          340
+        ],
+        "flags": {
+          "uuid": "0c760f91-08a1-493d-9b16-e8dbfb0d8f1d"
+        },
+        "order": 2,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "策略代码",
+            "type": 0,
+            "link": null,
+            "fieldName": "code",
+            "hide": false
+          },
+          {
+            "name": "因子值",
+            "type": 0,
+            "link": null,
+            "fieldName": "factors",
+            "hide": false
+          },
+          {
+            "name": "初始资金",
+            "type": 0,
+            "link": null,
+            "fieldName": "start_capital",
+            "hide": true
+          },
+          {
+            "name": "基准指数",
+            "type": 0,
+            "link": null,
+            "fieldName": "standard_symbol",
+            "hide": false
+          },
+          {
+            "name": "佣金率",
+            "type": 0,
+            "link": null,
+            "fieldName": "commission_rate",
+            "hide": true
+          },
+          {
+            "name": "回测频率",
+            "type": 0,
+            "link": null,
+            "fieldName": "frequency",
+            "hide": true
+          },
+          {
+            "name": "回测开始时间",
+            "type": 0,
+            "link": null,
+            "fieldName": "start_date",
+            "hide": true
+          },
+          {
+            "name": "回测结束时间",
+            "type": 0,
+            "link": null,
+            "fieldName": "end_date",
+            "hide": true
+          }
+        ],
+        "outputs": [
+          {
+            "name": "回测id",
+            "type": 0,
+            "links": [
+              3,
+              4
+            ],
+            "fieldName": "backtest_id",
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "策略代码": "# -*- coding: utf-8 -*-\n# 无前视动量轮动·参数化模板 —— v2_clean 崩盘(全区间-49%DD)后的防抖动改造底座。\n# 诊断:信号晚一天(实盘现实)时,高换手的\"追高杀跌\"磨损吃掉全部利润;\n# 对策全在 CFG 里,各变体只改 CFG,由 flows/a3-anti-whipsaw-flow.json 对比:\n#   exit_buffer  卖出缓冲:昨收 < MA(exit_ma)×(1-buffer) 才卖(防贴线抖动)\n#   trail        高点回撤止损阈值\n#   keep_rank    排名滞回:已持仓跌出前 keep_rank 名才调仓卖出(买入仍只买前 top_n)\n#   rebal        'W'=每周一 / 'W2'=隔周周一 / 'M'=每月首个交易日\n#   mom_days/mom2_days  动量窗口;mom2_days>0 时得分=两窗口动量均值(长短混合)\n#   regime_symbol/regime_ma  大盘闸门:该标的昨收低于其MA时禁止开新仓(0=关闭)\n#   pyramid      True=调仓日对已持仓的领先者继续加码(v1旧行为)\n# 决策只用截至昨收的 context.hist,当日收盘在 handle_data 末尾才入库 —— 无前视。\nfrom panda_backtest.api.api import *\nfrom panda_backtest.api.stock_api import *\nimport numpy as np\nimport pandas as pd\nimport datetime\n\nCFG = {'exit_ma': 20, 'exit_buffer': 0.02, 'trail': 0.10,\n       'mom_days': 60, 'mom2_days': 120, 'ma_filter': 60, 'top_n': 3, 'keep_rank': 5,\n       'rebal': 'M', 'regime_symbol': '510300.SH', 'regime_ma': 120, 'pyramid': False}\n\ndef initialize(context):\n    context.universe = ['510300.SH', '510500.SH', '159915.SZ', '588000.SH', '512760.SH', '515070.SH', '512690.SH', '512800.SH', '510880.SH', '515790.SH', '512660.SH', '512170.SH', '518880.SH', '511260.SH', '513100.SH', '510900.SH']\n    context.hist = {s: [] for s in context.universe}\n    if CFG['regime_symbol'] and CFG['regime_symbol'] not in context.hist:\n        context.hist[CFG['regime_symbol']] = []\n    context.hold = set()\n    context.max_price = {}\n    context.buy_day = 0  # 周一:用上周五收盘信号,周一开盘成交(对齐实盘)\n    context.prev_month = None\n\ndef _rank(context, last):\n    \"\"\"按动量排序的候选表 [(sym, score), ...],只含通过过滤的。\"\"\"\n    need = max(CFG['ma_filter'], CFG['mom_days'], CFG['mom2_days'])\n    out = []\n    for s in context.universe:\n        h = context.hist.get(s, [])\n        if s not in last or len(h) < need:\n            continue\n        p0 = h[-CFG['mom_days']]\n        if not p0:\n            continue\n        mom = last[s] / p0 - 1\n        if CFG['mom2_days']:\n            p1 = h[-CFG['mom2_days']]\n            if not p1:\n                continue\n            mom = (mom + (last[s] / p1 - 1)) / 2.0\n        if mom <= 0:\n            continue\n        if last[s] <= sum(h[-CFG['ma_filter']:]) / CFG['ma_filter']:\n            continue\n        out.append((s, mom))\n    out.sort(key=lambda x: x[1], reverse=True)\n    return out\n\ndef _regime_ok(context):\n    \"\"\"大盘闸门:闸门标的昨收 > 其MA(regime_ma) 才允许开新仓。关闭时恒True。\"\"\"\n    if not CFG['regime_ma'] or not CFG['regime_symbol']:\n        return True\n    h = context.hist.get(CFG['regime_symbol'], [])\n    if len(h) < CFG['regime_ma']:\n        return False   # 预热期不开仓(保守)\n    return h[-1] > sum(h[-CFG['regime_ma']:]) / CFG['regime_ma']\n\ndef handle_data(context, bar):\n    acc = context.stock_account_dict['8888']\n    try:\n        dt = datetime.datetime.strptime(str(context.trade_date), '%Y%m%d')\n        weekday, week_no = dt.weekday(), dt.isocalendar()[1]\n    except:\n        weekday, week_no = -1, 0\n\n    # ===== 决策阶段:只用截至昨收的 hist =====\n    last = {s: context.hist[s][-1] for s in context.hist if context.hist.get(s)}\n\n    # 每日退出:MA 破位带缓冲 + 高点回撤\n    for s in list(context.hold):\n        if s not in last:\n            continue\n        h = context.hist.get(s, [])\n        if len(h) < CFG['exit_ma']:\n            continue\n        px = last[s]\n        ma = sum(h[-CFG['exit_ma']:]) / CFG['exit_ma']\n        sold = False\n        if px < ma * (1 - CFG['exit_buffer']):\n            pos = acc.positions.get(s)\n            if pos and pos.sellable > 0:\n                order_shares('8888', s, -pos.sellable, style=MarketOrderStyle)\n                context.hold.discard(s)\n                context.max_price.pop(s, None)\n                SRLogger.info('卖出 %s (昨收破MA%d带%.0f%%缓冲)' % (s, CFG['exit_ma'], CFG['exit_buffer'] * 100))\n                sold = True\n        if sold:\n            continue\n        mx = context.max_price.get(s, px)\n        if px > mx:\n            context.max_price[s] = px\n        elif mx > 0 and (mx - px) / mx >= CFG['trail']:\n            pos = acc.positions.get(s)\n            if pos and pos.sellable > 0:\n                order_shares('8888', s, -pos.sellable, style=MarketOrderStyle)\n                context.hold.discard(s)\n                context.max_price.pop(s, None)\n                SRLogger.info('卖出 %s (较高点回撤%.0f%%)' % (s, CFG['trail'] * 100))\n\n    # 调仓日:W=每周一 / W2=隔周周一 / M=每月首个交易日\n    if CFG['rebal'] == 'M':\n        cur_month = (dt.year, dt.month) if weekday >= 0 else None\n        rebal = cur_month is not None and cur_month != context.prev_month\n        if cur_month is not None:\n            context.prev_month = cur_month\n    elif CFG['rebal'] == 'W2':\n        rebal = (weekday == context.buy_day) and week_no % 2 == 0\n    else:\n        rebal = (weekday == context.buy_day)\n    if rebal:\n        ranked = _rank(context, last)\n        order = [s for s, _ in ranked]\n        top_buy = order[:CFG['top_n']]\n        keep = set(order[:max(CFG['keep_rank'], CFG['top_n'])])\n\n        # 滞回卖出:已持仓跌出前 keep_rank 名才卖(不是跌出 top_n 就卖)\n        for s in list(context.hold):\n            if s not in keep:\n                pos = acc.positions.get(s)\n                if pos and pos.sellable > 0:\n                    order_shares('8888', s, -pos.sellable, style=MarketOrderStyle)\n                    context.hold.discard(s)\n                    context.max_price.pop(s, None)\n                    SRLogger.info('卖出 %s (跌出前%d名)' % (s, CFG['keep_rank']))\n\n        # 买入:大盘闸门放行才开新仓;只补空出的仓位;pyramid=False 时跳过已持仓\n        if not _regime_ok(context):\n            top_buy = []\n            SRLogger.info('大盘闸门关闭(%s 低于MA%d),本期不开新仓' % (CFG['regime_symbol'], CFG['regime_ma']))\n        targets = [s for s in top_buy if CFG['pyramid'] or s not in context.hold]\n        room = max(CFG['top_n'] - (0 if CFG['pyramid'] else len(context.hold)), 0)\n        targets = targets[:room] if not CFG['pyramid'] else targets\n        if targets:\n            budget_per = acc.total_value * 0.95 / CFG['top_n']\n            for s in targets:\n                if s not in last:\n                    continue\n                qty = int(budget_per / last[s] / 100) * 100\n                if qty >= 100 and acc.cash >= qty * last[s]:\n                    order_shares('8888', s, qty, style=MarketOrderStyle)\n                    context.hold.add(s)\n                    context.max_price[s] = last[s]\n                    SRLogger.info('买入 %s %d股 (按昨收%.3f定量)' % (s, qty, last[s]))\n                else:\n                    SRLogger.info('想买 %s 但资金不足或不足100股' % s)\n\n    # ===== 收盘入库:今天的收盘价此刻才可见于下个交易日(含闸门标的) =====\n    for s in list(context.hist.keys()):\n        try:\n            b = bar[s]\n            if b is None or getattr(b, 'close', None) in (None, 0):\n                continue\n            context.hist[s].append(b.close)\n            if len(context.hist[s]) > 250:\n                context.hist[s] = context.hist[s][-250:]\n        except Exception as e:\n            SRLogger.info('数据异常 %s: %s' % (s, e))\n            continue\n",
+          "初始资金": 1000000,
+          "基准指数": "沪深300",
+          "佣金率": 1,
+          "回测频率": "1d",
+          "回测开始时间": "20250101",
+          "回测结束时间": "20260630"
+        }
+      },
+      {
+        "id": 4,
+        "type": "BackTestResultControl",
+        "title": "回测结果(点开看图)",
+        "pos": [
+          1540,
+          40
+        ],
+        "size": [
+          320,
+          140
+        ],
+        "flags": {
+          "uuid": "d6560f89-9783-4e19-adfd-ea52e9469cc3"
+        },
+        "order": 3,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "回测任务",
+            "type": 0,
+            "link": 3,
+            "fieldName": "task_id",
+            "hide": false
+          }
+        ],
+        "outputs": [
+          {
+            "name": "图表绘制",
+            "type": 0,
+            "links": [],
+            "fieldName": "task_id",
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "回测任务": "error"
+        }
+      },
+      {
+        "id": 5,
+        "type": "StockBacktestControl",
+        "title": "F 同E但无闸门 · 训练21H2-24",
+        "pos": [
+          80,
+          460
+        ],
+        "size": [
+          420,
+          340
+        ],
+        "flags": {
+          "uuid": "6014b5a6-3fac-4080-9c24-708a3e0c7545"
+        },
+        "order": 4,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "策略代码",
+            "type": 0,
+            "link": null,
+            "fieldName": "code",
+            "hide": false
+          },
+          {
+            "name": "因子值",
+            "type": 0,
+            "link": null,
+            "fieldName": "factors",
+            "hide": false
+          },
+          {
+            "name": "初始资金",
+            "type": 0,
+            "link": null,
+            "fieldName": "start_capital",
+            "hide": true
+          },
+          {
+            "name": "基准指数",
+            "type": 0,
+            "link": null,
+            "fieldName": "standard_symbol",
+            "hide": false
+          },
+          {
+            "name": "佣金率",
+            "type": 0,
+            "link": null,
+            "fieldName": "commission_rate",
+            "hide": true
+          },
+          {
+            "name": "回测频率",
+            "type": 0,
+            "link": null,
+            "fieldName": "frequency",
+            "hide": true
+          },
+          {
+            "name": "回测开始时间",
+            "type": 0,
+            "link": null,
+            "fieldName": "start_date",
+            "hide": true
+          },
+          {
+            "name": "回测结束时间",
+            "type": 0,
+            "link": null,
+            "fieldName": "end_date",
+            "hide": true
+          }
+        ],
+        "outputs": [
+          {
+            "name": "回测id",
+            "type": 0,
+            "links": [
+              5,
+              6
+            ],
+            "fieldName": "backtest_id",
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "策略代码": "# -*- coding: utf-8 -*-\n# 无前视动量轮动·参数化模板 —— v2_clean 崩盘(全区间-49%DD)后的防抖动改造底座。\n# 诊断:信号晚一天(实盘现实)时,高换手的\"追高杀跌\"磨损吃掉全部利润;\n# 对策全在 CFG 里,各变体只改 CFG,由 flows/a3-anti-whipsaw-flow.json 对比:\n#   exit_buffer  卖出缓冲:昨收 < MA(exit_ma)×(1-buffer) 才卖(防贴线抖动)\n#   trail        高点回撤止损阈值\n#   keep_rank    排名滞回:已持仓跌出前 keep_rank 名才调仓卖出(买入仍只买前 top_n)\n#   rebal        'W'=每周一 / 'W2'=隔周周一 / 'M'=每月首个交易日\n#   mom_days/mom2_days  动量窗口;mom2_days>0 时得分=两窗口动量均值(长短混合)\n#   regime_symbol/regime_ma  大盘闸门:该标的昨收低于其MA时禁止开新仓(0=关闭)\n#   pyramid      True=调仓日对已持仓的领先者继续加码(v1旧行为)\n# 决策只用截至昨收的 context.hist,当日收盘在 handle_data 末尾才入库 —— 无前视。\nfrom panda_backtest.api.api import *\nfrom panda_backtest.api.stock_api import *\nimport numpy as np\nimport pandas as pd\nimport datetime\n\nCFG = {'exit_ma': 20, 'exit_buffer': 0.02, 'trail': 0.10,\n       'mom_days': 60, 'mom2_days': 120, 'ma_filter': 60, 'top_n': 3, 'keep_rank': 5,\n       'rebal': 'M', 'regime_symbol': '', 'regime_ma': 0, 'pyramid': False}\n\ndef initialize(context):\n    context.universe = ['510300.SH', '510500.SH', '159915.SZ', '588000.SH', '512760.SH', '515070.SH', '512690.SH', '512800.SH', '510880.SH', '515790.SH', '512660.SH', '512170.SH', '518880.SH', '511260.SH', '513100.SH', '510900.SH']\n    context.hist = {s: [] for s in context.universe}\n    if CFG['regime_symbol'] and CFG['regime_symbol'] not in context.hist:\n        context.hist[CFG['regime_symbol']] = []\n    context.hold = set()\n    context.max_price = {}\n    context.buy_day = 0  # 周一:用上周五收盘信号,周一开盘成交(对齐实盘)\n    context.prev_month = None\n\ndef _rank(context, last):\n    \"\"\"按动量排序的候选表 [(sym, score), ...],只含通过过滤的。\"\"\"\n    need = max(CFG['ma_filter'], CFG['mom_days'], CFG['mom2_days'])\n    out = []\n    for s in context.universe:\n        h = context.hist.get(s, [])\n        if s not in last or len(h) < need:\n            continue\n        p0 = h[-CFG['mom_days']]\n        if not p0:\n            continue\n        mom = last[s] / p0 - 1\n        if CFG['mom2_days']:\n            p1 = h[-CFG['mom2_days']]\n            if not p1:\n                continue\n            mom = (mom + (last[s] / p1 - 1)) / 2.0\n        if mom <= 0:\n            continue\n        if last[s] <= sum(h[-CFG['ma_filter']:]) / CFG['ma_filter']:\n            continue\n        out.append((s, mom))\n    out.sort(key=lambda x: x[1], reverse=True)\n    return out\n\ndef _regime_ok(context):\n    \"\"\"大盘闸门:闸门标的昨收 > 其MA(regime_ma) 才允许开新仓。关闭时恒True。\"\"\"\n    if not CFG['regime_ma'] or not CFG['regime_symbol']:\n        return True\n    h = context.hist.get(CFG['regime_symbol'], [])\n    if len(h) < CFG['regime_ma']:\n        return False   # 预热期不开仓(保守)\n    return h[-1] > sum(h[-CFG['regime_ma']:]) / CFG['regime_ma']\n\ndef handle_data(context, bar):\n    acc = context.stock_account_dict['8888']\n    try:\n        dt = datetime.datetime.strptime(str(context.trade_date), '%Y%m%d')\n        weekday, week_no = dt.weekday(), dt.isocalendar()[1]\n    except:\n        weekday, week_no = -1, 0\n\n    # ===== 决策阶段:只用截至昨收的 hist =====\n    last = {s: context.hist[s][-1] for s in context.hist if context.hist.get(s)}\n\n    # 每日退出:MA 破位带缓冲 + 高点回撤\n    for s in list(context.hold):\n        if s not in last:\n            continue\n        h = context.hist.get(s, [])\n        if len(h) < CFG['exit_ma']:\n            continue\n        px = last[s]\n        ma = sum(h[-CFG['exit_ma']:]) / CFG['exit_ma']\n        sold = False\n        if px < ma * (1 - CFG['exit_buffer']):\n            pos = acc.positions.get(s)\n            if pos and pos.sellable > 0:\n                order_shares('8888', s, -pos.sellable, style=MarketOrderStyle)\n                context.hold.discard(s)\n                context.max_price.pop(s, None)\n                SRLogger.info('卖出 %s (昨收破MA%d带%.0f%%缓冲)' % (s, CFG['exit_ma'], CFG['exit_buffer'] * 100))\n                sold = True\n        if sold:\n            continue\n        mx = context.max_price.get(s, px)\n        if px > mx:\n            context.max_price[s] = px\n        elif mx > 0 and (mx - px) / mx >= CFG['trail']:\n            pos = acc.positions.get(s)\n            if pos and pos.sellable > 0:\n                order_shares('8888', s, -pos.sellable, style=MarketOrderStyle)\n                context.hold.discard(s)\n                context.max_price.pop(s, None)\n                SRLogger.info('卖出 %s (较高点回撤%.0f%%)' % (s, CFG['trail'] * 100))\n\n    # 调仓日:W=每周一 / W2=隔周周一 / M=每月首个交易日\n    if CFG['rebal'] == 'M':\n        cur_month = (dt.year, dt.month) if weekday >= 0 else None\n        rebal = cur_month is not None and cur_month != context.prev_month\n        if cur_month is not None:\n            context.prev_month = cur_month\n    elif CFG['rebal'] == 'W2':\n        rebal = (weekday == context.buy_day) and week_no % 2 == 0\n    else:\n        rebal = (weekday == context.buy_day)\n    if rebal:\n        ranked = _rank(context, last)\n        order = [s for s, _ in ranked]\n        top_buy = order[:CFG['top_n']]\n        keep = set(order[:max(CFG['keep_rank'], CFG['top_n'])])\n\n        # 滞回卖出:已持仓跌出前 keep_rank 名才卖(不是跌出 top_n 就卖)\n        for s in list(context.hold):\n            if s not in keep:\n                pos = acc.positions.get(s)\n                if pos and pos.sellable > 0:\n                    order_shares('8888', s, -pos.sellable, style=MarketOrderStyle)\n                    context.hold.discard(s)\n                    context.max_price.pop(s, None)\n                    SRLogger.info('卖出 %s (跌出前%d名)' % (s, CFG['keep_rank']))\n\n        # 买入:大盘闸门放行才开新仓;只补空出的仓位;pyramid=False 时跳过已持仓\n        if not _regime_ok(context):\n            top_buy = []\n            SRLogger.info('大盘闸门关闭(%s 低于MA%d),本期不开新仓' % (CFG['regime_symbol'], CFG['regime_ma']))\n        targets = [s for s in top_buy if CFG['pyramid'] or s not in context.hold]\n        room = max(CFG['top_n'] - (0 if CFG['pyramid'] else len(context.hold)), 0)\n        targets = targets[:room] if not CFG['pyramid'] else targets\n        if targets:\n            budget_per = acc.total_value * 0.95 / CFG['top_n']\n            for s in targets:\n                if s not in last:\n                    continue\n                qty = int(budget_per / last[s] / 100) * 100\n                if qty >= 100 and acc.cash >= qty * last[s]:\n                    order_shares('8888', s, qty, style=MarketOrderStyle)\n                    context.hold.add(s)\n                    context.max_price[s] = last[s]\n                    SRLogger.info('买入 %s %d股 (按昨收%.3f定量)' % (s, qty, last[s]))\n                else:\n                    SRLogger.info('想买 %s 但资金不足或不足100股' % s)\n\n    # ===== 收盘入库:今天的收盘价此刻才可见于下个交易日(含闸门标的) =====\n    for s in list(context.hist.keys()):\n        try:\n            b = bar[s]\n            if b is None or getattr(b, 'close', None) in (None, 0):\n                continue\n            context.hist[s].append(b.close)\n            if len(context.hist[s]) > 250:\n                context.hist[s] = context.hist[s][-250:]\n        except Exception as e:\n            SRLogger.info('数据异常 %s: %s' % (s, e))\n            continue\n",
+          "初始资金": 1000000,
+          "基准指数": "沪深300",
+          "佣金率": 1,
+          "回测频率": "1d",
+          "回测开始时间": "20210701",
+          "回测结束时间": "20241231"
+        }
+      },
+      {
+        "id": 6,
+        "type": "BackTestResultControl",
+        "title": "回测结果(点开看图)",
+        "pos": [
+          560,
+          460
+        ],
+        "size": [
+          320,
+          140
+        ],
+        "flags": {
+          "uuid": "6feca8a8-3c0c-472e-9ae6-aa91530ee921"
+        },
+        "order": 5,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "回测任务",
+            "type": 0,
+            "link": 5,
+            "fieldName": "task_id",
+            "hide": false
+          }
+        ],
+        "outputs": [
+          {
+            "name": "图表绘制",
+            "type": 0,
+            "links": [],
+            "fieldName": "task_id",
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "回测任务": "error"
+        }
+      },
+      {
+        "id": 7,
+        "type": "StockBacktestControl",
+        "title": "F 同E但无闸门 · 测试25-26H1",
+        "pos": [
+          1060,
+          460
+        ],
+        "size": [
+          420,
+          340
+        ],
+        "flags": {
+          "uuid": "41704a2f-716a-4ac6-9462-1924da25a9e1"
+        },
+        "order": 6,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "策略代码",
+            "type": 0,
+            "link": null,
+            "fieldName": "code",
+            "hide": false
+          },
+          {
+            "name": "因子值",
+            "type": 0,
+            "link": null,
+            "fieldName": "factors",
+            "hide": false
+          },
+          {
+            "name": "初始资金",
+            "type": 0,
+            "link": null,
+            "fieldName": "start_capital",
+            "hide": true
+          },
+          {
+            "name": "基准指数",
+            "type": 0,
+            "link": null,
+            "fieldName": "standard_symbol",
+            "hide": false
+          },
+          {
+            "name": "佣金率",
+            "type": 0,
+            "link": null,
+            "fieldName": "commission_rate",
+            "hide": true
+          },
+          {
+            "name": "回测频率",
+            "type": 0,
+            "link": null,
+            "fieldName": "frequency",
+            "hide": true
+          },
+          {
+            "name": "回测开始时间",
+            "type": 0,
+            "link": null,
+            "fieldName": "start_date",
+            "hide": true
+          },
+          {
+            "name": "回测结束时间",
+            "type": 0,
+            "link": null,
+            "fieldName": "end_date",
+            "hide": true
+          }
+        ],
+        "outputs": [
+          {
+            "name": "回测id",
+            "type": 0,
+            "links": [
+              7,
+              8
+            ],
+            "fieldName": "backtest_id",
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "策略代码": "# -*- coding: utf-8 -*-\n# 无前视动量轮动·参数化模板 —— v2_clean 崩盘(全区间-49%DD)后的防抖动改造底座。\n# 诊断:信号晚一天(实盘现实)时,高换手的\"追高杀跌\"磨损吃掉全部利润;\n# 对策全在 CFG 里,各变体只改 CFG,由 flows/a3-anti-whipsaw-flow.json 对比:\n#   exit_buffer  卖出缓冲:昨收 < MA(exit_ma)×(1-buffer) 才卖(防贴线抖动)\n#   trail        高点回撤止损阈值\n#   keep_rank    排名滞回:已持仓跌出前 keep_rank 名才调仓卖出(买入仍只买前 top_n)\n#   rebal        'W'=每周一 / 'W2'=隔周周一 / 'M'=每月首个交易日\n#   mom_days/mom2_days  动量窗口;mom2_days>0 时得分=两窗口动量均值(长短混合)\n#   regime_symbol/regime_ma  大盘闸门:该标的昨收低于其MA时禁止开新仓(0=关闭)\n#   pyramid      True=调仓日对已持仓的领先者继续加码(v1旧行为)\n# 决策只用截至昨收的 context.hist,当日收盘在 handle_data 末尾才入库 —— 无前视。\nfrom panda_backtest.api.api import *\nfrom panda_backtest.api.stock_api import *\nimport numpy as np\nimport pandas as pd\nimport datetime\n\nCFG = {'exit_ma': 20, 'exit_buffer': 0.02, 'trail': 0.10,\n       'mom_days': 60, 'mom2_days': 120, 'ma_filter': 60, 'top_n': 3, 'keep_rank': 5,\n       'rebal': 'M', 'regime_symbol': '', 'regime_ma': 0, 'pyramid': False}\n\ndef initialize(context):\n    context.universe = ['510300.SH', '510500.SH', '159915.SZ', '588000.SH', '512760.SH', '515070.SH', '512690.SH', '512800.SH', '510880.SH', '515790.SH', '512660.SH', '512170.SH', '518880.SH', '511260.SH', '513100.SH', '510900.SH']\n    context.hist = {s: [] for s in context.universe}\n    if CFG['regime_symbol'] and CFG['regime_symbol'] not in context.hist:\n        context.hist[CFG['regime_symbol']] = []\n    context.hold = set()\n    context.max_price = {}\n    context.buy_day = 0  # 周一:用上周五收盘信号,周一开盘成交(对齐实盘)\n    context.prev_month = None\n\ndef _rank(context, last):\n    \"\"\"按动量排序的候选表 [(sym, score), ...],只含通过过滤的。\"\"\"\n    need = max(CFG['ma_filter'], CFG['mom_days'], CFG['mom2_days'])\n    out = []\n    for s in context.universe:\n        h = context.hist.get(s, [])\n        if s not in last or len(h) < need:\n            continue\n        p0 = h[-CFG['mom_days']]\n        if not p0:\n            continue\n        mom = last[s] / p0 - 1\n        if CFG['mom2_days']:\n            p1 = h[-CFG['mom2_days']]\n            if not p1:\n                continue\n            mom = (mom + (last[s] / p1 - 1)) / 2.0\n        if mom <= 0:\n            continue\n        if last[s] <= sum(h[-CFG['ma_filter']:]) / CFG['ma_filter']:\n            continue\n        out.append((s, mom))\n    out.sort(key=lambda x: x[1], reverse=True)\n    return out\n\ndef _regime_ok(context):\n    \"\"\"大盘闸门:闸门标的昨收 > 其MA(regime_ma) 才允许开新仓。关闭时恒True。\"\"\"\n    if not CFG['regime_ma'] or not CFG['regime_symbol']:\n        return True\n    h = context.hist.get(CFG['regime_symbol'], [])\n    if len(h) < CFG['regime_ma']:\n        return False   # 预热期不开仓(保守)\n    return h[-1] > sum(h[-CFG['regime_ma']:]) / CFG['regime_ma']\n\ndef handle_data(context, bar):\n    acc = context.stock_account_dict['8888']\n    try:\n        dt = datetime.datetime.strptime(str(context.trade_date), '%Y%m%d')\n        weekday, week_no = dt.weekday(), dt.isocalendar()[1]\n    except:\n        weekday, week_no = -1, 0\n\n    # ===== 决策阶段:只用截至昨收的 hist =====\n    last = {s: context.hist[s][-1] for s in context.hist if context.hist.get(s)}\n\n    # 每日退出:MA 破位带缓冲 + 高点回撤\n    for s in list(context.hold):\n        if s not in last:\n            continue\n        h = context.hist.get(s, [])\n        if len(h) < CFG['exit_ma']:\n            continue\n        px = last[s]\n        ma = sum(h[-CFG['exit_ma']:]) / CFG['exit_ma']\n        sold = False\n        if px < ma * (1 - CFG['exit_buffer']):\n            pos = acc.positions.get(s)\n            if pos and pos.sellable > 0:\n                order_shares('8888', s, -pos.sellable, style=MarketOrderStyle)\n                context.hold.discard(s)\n                context.max_price.pop(s, None)\n                SRLogger.info('卖出 %s (昨收破MA%d带%.0f%%缓冲)' % (s, CFG['exit_ma'], CFG['exit_buffer'] * 100))\n                sold = True\n        if sold:\n            continue\n        mx = context.max_price.get(s, px)\n        if px > mx:\n            context.max_price[s] = px\n        elif mx > 0 and (mx - px) / mx >= CFG['trail']:\n            pos = acc.positions.get(s)\n            if pos and pos.sellable > 0:\n                order_shares('8888', s, -pos.sellable, style=MarketOrderStyle)\n                context.hold.discard(s)\n                context.max_price.pop(s, None)\n                SRLogger.info('卖出 %s (较高点回撤%.0f%%)' % (s, CFG['trail'] * 100))\n\n    # 调仓日:W=每周一 / W2=隔周周一 / M=每月首个交易日\n    if CFG['rebal'] == 'M':\n        cur_month = (dt.year, dt.month) if weekday >= 0 else None\n        rebal = cur_month is not None and cur_month != context.prev_month\n        if cur_month is not None:\n            context.prev_month = cur_month\n    elif CFG['rebal'] == 'W2':\n        rebal = (weekday == context.buy_day) and week_no % 2 == 0\n    else:\n        rebal = (weekday == context.buy_day)\n    if rebal:\n        ranked = _rank(context, last)\n        order = [s for s, _ in ranked]\n        top_buy = order[:CFG['top_n']]\n        keep = set(order[:max(CFG['keep_rank'], CFG['top_n'])])\n\n        # 滞回卖出:已持仓跌出前 keep_rank 名才卖(不是跌出 top_n 就卖)\n        for s in list(context.hold):\n            if s not in keep:\n                pos = acc.positions.get(s)\n                if pos and pos.sellable > 0:\n                    order_shares('8888', s, -pos.sellable, style=MarketOrderStyle)\n                    context.hold.discard(s)\n                    context.max_price.pop(s, None)\n                    SRLogger.info('卖出 %s (跌出前%d名)' % (s, CFG['keep_rank']))\n\n        # 买入:大盘闸门放行才开新仓;只补空出的仓位;pyramid=False 时跳过已持仓\n        if not _regime_ok(context):\n            top_buy = []\n            SRLogger.info('大盘闸门关闭(%s 低于MA%d),本期不开新仓' % (CFG['regime_symbol'], CFG['regime_ma']))\n        targets = [s for s in top_buy if CFG['pyramid'] or s not in context.hold]\n        room = max(CFG['top_n'] - (0 if CFG['pyramid'] else len(context.hold)), 0)\n        targets = targets[:room] if not CFG['pyramid'] else targets\n        if targets:\n            budget_per = acc.total_value * 0.95 / CFG['top_n']\n            for s in targets:\n                if s not in last:\n                    continue\n                qty = int(budget_per / last[s] / 100) * 100\n                if qty >= 100 and acc.cash >= qty * last[s]:\n                    order_shares('8888', s, qty, style=MarketOrderStyle)\n                    context.hold.add(s)\n                    context.max_price[s] = last[s]\n                    SRLogger.info('买入 %s %d股 (按昨收%.3f定量)' % (s, qty, last[s]))\n                else:\n                    SRLogger.info('想买 %s 但资金不足或不足100股' % s)\n\n    # ===== 收盘入库:今天的收盘价此刻才可见于下个交易日(含闸门标的) =====\n    for s in list(context.hist.keys()):\n        try:\n            b = bar[s]\n            if b is None or getattr(b, 'close', None) in (None, 0):\n                continue\n            context.hist[s].append(b.close)\n            if len(context.hist[s]) > 250:\n                context.hist[s] = context.hist[s][-250:]\n        except Exception as e:\n            SRLogger.info('数据异常 %s: %s' % (s, e))\n            continue\n",
+          "初始资金": 1000000,
+          "基准指数": "沪深300",
+          "佣金率": 1,
+          "回测频率": "1d",
+          "回测开始时间": "20250101",
+          "回测结束时间": "20260630"
+        }
+      },
+      {
+        "id": 8,
+        "type": "BackTestResultControl",
+        "title": "回测结果(点开看图)",
+        "pos": [
+          1540,
+          460
+        ],
+        "size": [
+          320,
+          140
+        ],
+        "flags": {
+          "uuid": "12164a37-9a03-4574-afe2-91fa0ace3578"
+        },
+        "order": 7,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "回测任务",
+            "type": 0,
+            "link": 7,
+            "fieldName": "task_id",
+            "hide": false
+          }
+        ],
+        "outputs": [
+          {
+            "name": "图表绘制",
+            "type": 0,
+            "links": [],
+            "fieldName": "task_id",
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "回测任务": "error"
+        }
+      },
+      {
+        "id": 9,
+        "type": "StockBacktestControl",
+        "title": "G 周频·20日动量(老结构) · 训练21H2-24",
+        "pos": [
+          80,
+          880
+        ],
+        "size": [
+          420,
+          340
+        ],
+        "flags": {
+          "uuid": "129c66a4-2fb4-4be3-a50d-86973cd4bbe5"
+        },
+        "order": 8,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "策略代码",
+            "type": 0,
+            "link": null,
+            "fieldName": "code",
+            "hide": false
+          },
+          {
+            "name": "因子值",
+            "type": 0,
+            "link": null,
+            "fieldName": "factors",
+            "hide": false
+          },
+          {
+            "name": "初始资金",
+            "type": 0,
+            "link": null,
+            "fieldName": "start_capital",
+            "hide": true
+          },
+          {
+            "name": "基准指数",
+            "type": 0,
+            "link": null,
+            "fieldName": "standard_symbol",
+            "hide": false
+          },
+          {
+            "name": "佣金率",
+            "type": 0,
+            "link": null,
+            "fieldName": "commission_rate",
+            "hide": true
+          },
+          {
+            "name": "回测频率",
+            "type": 0,
+            "link": null,
+            "fieldName": "frequency",
+            "hide": true
+          },
+          {
+            "name": "回测开始时间",
+            "type": 0,
+            "link": null,
+            "fieldName": "start_date",
+            "hide": true
+          },
+          {
+            "name": "回测结束时间",
+            "type": 0,
+            "link": null,
+            "fieldName": "end_date",
+            "hide": true
+          }
+        ],
+        "outputs": [
+          {
+            "name": "回测id",
+            "type": 0,
+            "links": [
+              9,
+              10
+            ],
+            "fieldName": "backtest_id",
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "策略代码": "# -*- coding: utf-8 -*-\n# 无前视动量轮动·参数化模板 —— v2_clean 崩盘(全区间-49%DD)后的防抖动改造底座。\n# 诊断:信号晚一天(实盘现实)时,高换手的\"追高杀跌\"磨损吃掉全部利润;\n# 对策全在 CFG 里,各变体只改 CFG,由 flows/a3-anti-whipsaw-flow.json 对比:\n#   exit_buffer  卖出缓冲:昨收 < MA(exit_ma)×(1-buffer) 才卖(防贴线抖动)\n#   trail        高点回撤止损阈值\n#   keep_rank    排名滞回:已持仓跌出前 keep_rank 名才调仓卖出(买入仍只买前 top_n)\n#   rebal        'W'=每周一 / 'W2'=隔周周一 / 'M'=每月首个交易日\n#   mom_days/mom2_days  动量窗口;mom2_days>0 时得分=两窗口动量均值(长短混合)\n#   regime_symbol/regime_ma  大盘闸门:该标的昨收低于其MA时禁止开新仓(0=关闭)\n#   pyramid      True=调仓日对已持仓的领先者继续加码(v1旧行为)\n# 决策只用截至昨收的 context.hist,当日收盘在 handle_data 末尾才入库 —— 无前视。\nfrom panda_backtest.api.api import *\nfrom panda_backtest.api.stock_api import *\nimport numpy as np\nimport pandas as pd\nimport datetime\n\nCFG = {'exit_ma': 20, 'exit_buffer': 0.02, 'trail': 0.10,\n       'mom_days': 20, 'mom2_days': 0, 'ma_filter': 60, 'top_n': 3, 'keep_rank': 5,\n       'rebal': 'W', 'regime_symbol': '', 'regime_ma': 0, 'pyramid': False}\n\ndef initialize(context):\n    context.universe = ['510300.SH', '510500.SH', '159915.SZ', '588000.SH', '512760.SH', '515070.SH', '512690.SH', '512800.SH', '510880.SH', '515790.SH', '512660.SH', '512170.SH', '518880.SH', '511260.SH', '513100.SH', '510900.SH']\n    context.hist = {s: [] for s in context.universe}\n    if CFG['regime_symbol'] and CFG['regime_symbol'] not in context.hist:\n        context.hist[CFG['regime_symbol']] = []\n    context.hold = set()\n    context.max_price = {}\n    context.buy_day = 0  # 周一:用上周五收盘信号,周一开盘成交(对齐实盘)\n    context.prev_month = None\n\ndef _rank(context, last):\n    \"\"\"按动量排序的候选表 [(sym, score), ...],只含通过过滤的。\"\"\"\n    need = max(CFG['ma_filter'], CFG['mom_days'], CFG['mom2_days'])\n    out = []\n    for s in context.universe:\n        h = context.hist.get(s, [])\n        if s not in last or len(h) < need:\n            continue\n        p0 = h[-CFG['mom_days']]\n        if not p0:\n            continue\n        mom = last[s] / p0 - 1\n        if CFG['mom2_days']:\n            p1 = h[-CFG['mom2_days']]\n            if not p1:\n                continue\n            mom = (mom + (last[s] / p1 - 1)) / 2.0\n        if mom <= 0:\n            continue\n        if last[s] <= sum(h[-CFG['ma_filter']:]) / CFG['ma_filter']:\n            continue\n        out.append((s, mom))\n    out.sort(key=lambda x: x[1], reverse=True)\n    return out\n\ndef _regime_ok(context):\n    \"\"\"大盘闸门:闸门标的昨收 > 其MA(regime_ma) 才允许开新仓。关闭时恒True。\"\"\"\n    if not CFG['regime_ma'] or not CFG['regime_symbol']:\n        return True\n    h = context.hist.get(CFG['regime_symbol'], [])\n    if len(h) < CFG['regime_ma']:\n        return False   # 预热期不开仓(保守)\n    return h[-1] > sum(h[-CFG['regime_ma']:]) / CFG['regime_ma']\n\ndef handle_data(context, bar):\n    acc = context.stock_account_dict['8888']\n    try:\n        dt = datetime.datetime.strptime(str(context.trade_date), '%Y%m%d')\n        weekday, week_no = dt.weekday(), dt.isocalendar()[1]\n    except:\n        weekday, week_no = -1, 0\n\n    # ===== 决策阶段:只用截至昨收的 hist =====\n    last = {s: context.hist[s][-1] for s in context.hist if context.hist.get(s)}\n\n    # 每日退出:MA 破位带缓冲 + 高点回撤\n    for s in list(context.hold):\n        if s not in last:\n            continue\n        h = context.hist.get(s, [])\n        if len(h) < CFG['exit_ma']:\n            continue\n        px = last[s]\n        ma = sum(h[-CFG['exit_ma']:]) / CFG['exit_ma']\n        sold = False\n        if px < ma * (1 - CFG['exit_buffer']):\n            pos = acc.positions.get(s)\n            if pos and pos.sellable > 0:\n                order_shares('8888', s, -pos.sellable, style=MarketOrderStyle)\n                context.hold.discard(s)\n                context.max_price.pop(s, None)\n                SRLogger.info('卖出 %s (昨收破MA%d带%.0f%%缓冲)' % (s, CFG['exit_ma'], CFG['exit_buffer'] * 100))\n                sold = True\n        if sold:\n            continue\n        mx = context.max_price.get(s, px)\n        if px > mx:\n            context.max_price[s] = px\n        elif mx > 0 and (mx - px) / mx >= CFG['trail']:\n            pos = acc.positions.get(s)\n            if pos and pos.sellable > 0:\n                order_shares('8888', s, -pos.sellable, style=MarketOrderStyle)\n                context.hold.discard(s)\n                context.max_price.pop(s, None)\n                SRLogger.info('卖出 %s (较高点回撤%.0f%%)' % (s, CFG['trail'] * 100))\n\n    # 调仓日:W=每周一 / W2=隔周周一 / M=每月首个交易日\n    if CFG['rebal'] == 'M':\n        cur_month = (dt.year, dt.month) if weekday >= 0 else None\n        rebal = cur_month is not None and cur_month != context.prev_month\n        if cur_month is not None:\n            context.prev_month = cur_month\n    elif CFG['rebal'] == 'W2':\n        rebal = (weekday == context.buy_day) and week_no % 2 == 0\n    else:\n        rebal = (weekday == context.buy_day)\n    if rebal:\n        ranked = _rank(context, last)\n        order = [s for s, _ in ranked]\n        top_buy = order[:CFG['top_n']]\n        keep = set(order[:max(CFG['keep_rank'], CFG['top_n'])])\n\n        # 滞回卖出:已持仓跌出前 keep_rank 名才卖(不是跌出 top_n 就卖)\n        for s in list(context.hold):\n            if s not in keep:\n                pos = acc.positions.get(s)\n                if pos and pos.sellable > 0:\n                    order_shares('8888', s, -pos.sellable, style=MarketOrderStyle)\n                    context.hold.discard(s)\n                    context.max_price.pop(s, None)\n                    SRLogger.info('卖出 %s (跌出前%d名)' % (s, CFG['keep_rank']))\n\n        # 买入:大盘闸门放行才开新仓;只补空出的仓位;pyramid=False 时跳过已持仓\n        if not _regime_ok(context):\n            top_buy = []\n            SRLogger.info('大盘闸门关闭(%s 低于MA%d),本期不开新仓' % (CFG['regime_symbol'], CFG['regime_ma']))\n        targets = [s for s in top_buy if CFG['pyramid'] or s not in context.hold]\n        room = max(CFG['top_n'] - (0 if CFG['pyramid'] else len(context.hold)), 0)\n        targets = targets[:room] if not CFG['pyramid'] else targets\n        if targets:\n            budget_per = acc.total_value * 0.95 / CFG['top_n']\n            for s in targets:\n                if s not in last:\n                    continue\n                qty = int(budget_per / last[s] / 100) * 100\n                if qty >= 100 and acc.cash >= qty * last[s]:\n                    order_shares('8888', s, qty, style=MarketOrderStyle)\n                    context.hold.add(s)\n                    context.max_price[s] = last[s]\n                    SRLogger.info('买入 %s %d股 (按昨收%.3f定量)' % (s, qty, last[s]))\n                else:\n                    SRLogger.info('想买 %s 但资金不足或不足100股' % s)\n\n    # ===== 收盘入库:今天的收盘价此刻才可见于下个交易日(含闸门标的) =====\n    for s in list(context.hist.keys()):\n        try:\n            b = bar[s]\n            if b is None or getattr(b, 'close', None) in (None, 0):\n                continue\n            context.hist[s].append(b.close)\n            if len(context.hist[s]) > 250:\n                context.hist[s] = context.hist[s][-250:]\n        except Exception as e:\n            SRLogger.info('数据异常 %s: %s' % (s, e))\n            continue\n",
+          "初始资金": 1000000,
+          "基准指数": "沪深300",
+          "佣金率": 1,
+          "回测频率": "1d",
+          "回测开始时间": "20210701",
+          "回测结束时间": "20241231"
+        }
+      },
+      {
+        "id": 10,
+        "type": "BackTestResultControl",
+        "title": "回测结果(点开看图)",
+        "pos": [
+          560,
+          880
+        ],
+        "size": [
+          320,
+          140
+        ],
+        "flags": {
+          "uuid": "bdee3791-0a8e-402c-a115-05c8aa95c96a"
+        },
+        "order": 9,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "回测任务",
+            "type": 0,
+            "link": 9,
+            "fieldName": "task_id",
+            "hide": false
+          }
+        ],
+        "outputs": [
+          {
+            "name": "图表绘制",
+            "type": 0,
+            "links": [],
+            "fieldName": "task_id",
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "回测任务": "error"
+        }
+      },
+      {
+        "id": 11,
+        "type": "StockBacktestControl",
+        "title": "G 周频·20日动量(老结构) · 测试25-26H1",
+        "pos": [
+          1060,
+          880
+        ],
+        "size": [
+          420,
+          340
+        ],
+        "flags": {
+          "uuid": "b8f73e40-db75-4203-8ead-15676bee16d8"
+        },
+        "order": 10,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "策略代码",
+            "type": 0,
+            "link": null,
+            "fieldName": "code",
+            "hide": false
+          },
+          {
+            "name": "因子值",
+            "type": 0,
+            "link": null,
+            "fieldName": "factors",
+            "hide": false
+          },
+          {
+            "name": "初始资金",
+            "type": 0,
+            "link": null,
+            "fieldName": "start_capital",
+            "hide": true
+          },
+          {
+            "name": "基准指数",
+            "type": 0,
+            "link": null,
+            "fieldName": "standard_symbol",
+            "hide": false
+          },
+          {
+            "name": "佣金率",
+            "type": 0,
+            "link": null,
+            "fieldName": "commission_rate",
+            "hide": true
+          },
+          {
+            "name": "回测频率",
+            "type": 0,
+            "link": null,
+            "fieldName": "frequency",
+            "hide": true
+          },
+          {
+            "name": "回测开始时间",
+            "type": 0,
+            "link": null,
+            "fieldName": "start_date",
+            "hide": true
+          },
+          {
+            "name": "回测结束时间",
+            "type": 0,
+            "link": null,
+            "fieldName": "end_date",
+            "hide": true
+          }
+        ],
+        "outputs": [
+          {
+            "name": "回测id",
+            "type": 0,
+            "links": [
+              11,
+              12
+            ],
+            "fieldName": "backtest_id",
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "策略代码": "# -*- coding: utf-8 -*-\n# 无前视动量轮动·参数化模板 —— v2_clean 崩盘(全区间-49%DD)后的防抖动改造底座。\n# 诊断:信号晚一天(实盘现实)时,高换手的\"追高杀跌\"磨损吃掉全部利润;\n# 对策全在 CFG 里,各变体只改 CFG,由 flows/a3-anti-whipsaw-flow.json 对比:\n#   exit_buffer  卖出缓冲:昨收 < MA(exit_ma)×(1-buffer) 才卖(防贴线抖动)\n#   trail        高点回撤止损阈值\n#   keep_rank    排名滞回:已持仓跌出前 keep_rank 名才调仓卖出(买入仍只买前 top_n)\n#   rebal        'W'=每周一 / 'W2'=隔周周一 / 'M'=每月首个交易日\n#   mom_days/mom2_days  动量窗口;mom2_days>0 时得分=两窗口动量均值(长短混合)\n#   regime_symbol/regime_ma  大盘闸门:该标的昨收低于其MA时禁止开新仓(0=关闭)\n#   pyramid      True=调仓日对已持仓的领先者继续加码(v1旧行为)\n# 决策只用截至昨收的 context.hist,当日收盘在 handle_data 末尾才入库 —— 无前视。\nfrom panda_backtest.api.api import *\nfrom panda_backtest.api.stock_api import *\nimport numpy as np\nimport pandas as pd\nimport datetime\n\nCFG = {'exit_ma': 20, 'exit_buffer': 0.02, 'trail': 0.10,\n       'mom_days': 20, 'mom2_days': 0, 'ma_filter': 60, 'top_n': 3, 'keep_rank': 5,\n       'rebal': 'W', 'regime_symbol': '', 'regime_ma': 0, 'pyramid': False}\n\ndef initialize(context):\n    context.universe = ['510300.SH', '510500.SH', '159915.SZ', '588000.SH', '512760.SH', '515070.SH', '512690.SH', '512800.SH', '510880.SH', '515790.SH', '512660.SH', '512170.SH', '518880.SH', '511260.SH', '513100.SH', '510900.SH']\n    context.hist = {s: [] for s in context.universe}\n    if CFG['regime_symbol'] and CFG['regime_symbol'] not in context.hist:\n        context.hist[CFG['regime_symbol']] = []\n    context.hold = set()\n    context.max_price = {}\n    context.buy_day = 0  # 周一:用上周五收盘信号,周一开盘成交(对齐实盘)\n    context.prev_month = None\n\ndef _rank(context, last):\n    \"\"\"按动量排序的候选表 [(sym, score), ...],只含通过过滤的。\"\"\"\n    need = max(CFG['ma_filter'], CFG['mom_days'], CFG['mom2_days'])\n    out = []\n    for s in context.universe:\n        h = context.hist.get(s, [])\n        if s not in last or len(h) < need:\n            continue\n        p0 = h[-CFG['mom_days']]\n        if not p0:\n            continue\n        mom = last[s] / p0 - 1\n        if CFG['mom2_days']:\n            p1 = h[-CFG['mom2_days']]\n            if not p1:\n                continue\n            mom = (mom + (last[s] / p1 - 1)) / 2.0\n        if mom <= 0:\n            continue\n        if last[s] <= sum(h[-CFG['ma_filter']:]) / CFG['ma_filter']:\n            continue\n        out.append((s, mom))\n    out.sort(key=lambda x: x[1], reverse=True)\n    return out\n\ndef _regime_ok(context):\n    \"\"\"大盘闸门:闸门标的昨收 > 其MA(regime_ma) 才允许开新仓。关闭时恒True。\"\"\"\n    if not CFG['regime_ma'] or not CFG['regime_symbol']:\n        return True\n    h = context.hist.get(CFG['regime_symbol'], [])\n    if len(h) < CFG['regime_ma']:\n        return False   # 预热期不开仓(保守)\n    return h[-1] > sum(h[-CFG['regime_ma']:]) / CFG['regime_ma']\n\ndef handle_data(context, bar):\n    acc = context.stock_account_dict['8888']\n    try:\n        dt = datetime.datetime.strptime(str(context.trade_date), '%Y%m%d')\n        weekday, week_no = dt.weekday(), dt.isocalendar()[1]\n    except:\n        weekday, week_no = -1, 0\n\n    # ===== 决策阶段:只用截至昨收的 hist =====\n    last = {s: context.hist[s][-1] for s in context.hist if context.hist.get(s)}\n\n    # 每日退出:MA 破位带缓冲 + 高点回撤\n    for s in list(context.hold):\n        if s not in last:\n            continue\n        h = context.hist.get(s, [])\n        if len(h) < CFG['exit_ma']:\n            continue\n        px = last[s]\n        ma = sum(h[-CFG['exit_ma']:]) / CFG['exit_ma']\n        sold = False\n        if px < ma * (1 - CFG['exit_buffer']):\n            pos = acc.positions.get(s)\n            if pos and pos.sellable > 0:\n                order_shares('8888', s, -pos.sellable, style=MarketOrderStyle)\n                context.hold.discard(s)\n                context.max_price.pop(s, None)\n                SRLogger.info('卖出 %s (昨收破MA%d带%.0f%%缓冲)' % (s, CFG['exit_ma'], CFG['exit_buffer'] * 100))\n                sold = True\n        if sold:\n            continue\n        mx = context.max_price.get(s, px)\n        if px > mx:\n            context.max_price[s] = px\n        elif mx > 0 and (mx - px) / mx >= CFG['trail']:\n            pos = acc.positions.get(s)\n            if pos and pos.sellable > 0:\n                order_shares('8888', s, -pos.sellable, style=MarketOrderStyle)\n                context.hold.discard(s)\n                context.max_price.pop(s, None)\n                SRLogger.info('卖出 %s (较高点回撤%.0f%%)' % (s, CFG['trail'] * 100))\n\n    # 调仓日:W=每周一 / W2=隔周周一 / M=每月首个交易日\n    if CFG['rebal'] == 'M':\n        cur_month = (dt.year, dt.month) if weekday >= 0 else None\n        rebal = cur_month is not None and cur_month != context.prev_month\n        if cur_month is not None:\n            context.prev_month = cur_month\n    elif CFG['rebal'] == 'W2':\n        rebal = (weekday == context.buy_day) and week_no % 2 == 0\n    else:\n        rebal = (weekday == context.buy_day)\n    if rebal:\n        ranked = _rank(context, last)\n        order = [s for s, _ in ranked]\n        top_buy = order[:CFG['top_n']]\n        keep = set(order[:max(CFG['keep_rank'], CFG['top_n'])])\n\n        # 滞回卖出:已持仓跌出前 keep_rank 名才卖(不是跌出 top_n 就卖)\n        for s in list(context.hold):\n            if s not in keep:\n                pos = acc.positions.get(s)\n                if pos and pos.sellable > 0:\n                    order_shares('8888', s, -pos.sellable, style=MarketOrderStyle)\n                    context.hold.discard(s)\n                    context.max_price.pop(s, None)\n                    SRLogger.info('卖出 %s (跌出前%d名)' % (s, CFG['keep_rank']))\n\n        # 买入:大盘闸门放行才开新仓;只补空出的仓位;pyramid=False 时跳过已持仓\n        if not _regime_ok(context):\n            top_buy = []\n            SRLogger.info('大盘闸门关闭(%s 低于MA%d),本期不开新仓' % (CFG['regime_symbol'], CFG['regime_ma']))\n        targets = [s for s in top_buy if CFG['pyramid'] or s not in context.hold]\n        room = max(CFG['top_n'] - (0 if CFG['pyramid'] else len(context.hold)), 0)\n        targets = targets[:room] if not CFG['pyramid'] else targets\n        if targets:\n            budget_per = acc.total_value * 0.95 / CFG['top_n']\n            for s in targets:\n                if s not in last:\n                    continue\n                qty = int(budget_per / last[s] / 100) * 100\n                if qty >= 100 and acc.cash >= qty * last[s]:\n                    order_shares('8888', s, qty, style=MarketOrderStyle)\n                    context.hold.add(s)\n                    context.max_price[s] = last[s]\n                    SRLogger.info('买入 %s %d股 (按昨收%.3f定量)' % (s, qty, last[s]))\n                else:\n                    SRLogger.info('想买 %s 但资金不足或不足100股' % s)\n\n    # ===== 收盘入库:今天的收盘价此刻才可见于下个交易日(含闸门标的) =====\n    for s in list(context.hist.keys()):\n        try:\n            b = bar[s]\n            if b is None or getattr(b, 'close', None) in (None, 0):\n                continue\n            context.hist[s].append(b.close)\n            if len(context.hist[s]) > 250:\n                context.hist[s] = context.hist[s][-250:]\n        except Exception as e:\n            SRLogger.info('数据异常 %s: %s' % (s, e))\n            continue\n",
+          "初始资金": 1000000,
+          "基准指数": "沪深300",
+          "佣金率": 1,
+          "回测频率": "1d",
+          "回测开始时间": "20250101",
+          "回测结束时间": "20260630"
+        }
+      },
+      {
+        "id": 12,
+        "type": "BackTestResultControl",
+        "title": "回测结果(点开看图)",
+        "pos": [
+          1540,
+          880
+        ],
+        "size": [
+          320,
+          140
+        ],
+        "flags": {
+          "uuid": "2058d751-edca-4714-8af9-52b4716010b9"
+        },
+        "order": 11,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "回测任务",
+            "type": 0,
+            "link": 11,
+            "fieldName": "task_id",
+            "hide": false
+          }
+        ],
+        "outputs": [
+          {
+            "name": "图表绘制",
+            "type": 0,
+            "links": [],
+            "fieldName": "task_id",
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "回测任务": "error"
+        }
+      },
+      {
+        "id": 13,
+        "type": "BacktestSummaryNode",
+        "title": "回测汇总表(自动)",
+        "pos": [
+          1000,
+          1400
+        ],
+        "size": [
+          380,
+          280
+        ],
+        "flags": {
+          "uuid": "817e5249-c175-4b1e-805e-0eb01ee8b991"
+        },
+        "order": 12,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "标签(逗号分隔)",
+            "type": 0,
+            "link": null,
+            "fieldName": "labels",
+            "hide": false
+          },
+          {
+            "name": "回测ID1",
+            "type": 0,
+            "link": 2,
+            "fieldName": "back_id_1",
+            "hide": false
+          },
+          {
+            "name": "回测ID2",
+            "type": 0,
+            "link": 4,
+            "fieldName": "back_id_2",
+            "hide": false
+          },
+          {
+            "name": "回测ID3",
+            "type": 0,
+            "link": 6,
+            "fieldName": "back_id_3",
+            "hide": false
+          },
+          {
+            "name": "回测ID4",
+            "type": 0,
+            "link": 8,
+            "fieldName": "back_id_4",
+            "hide": false
+          },
+          {
+            "name": "回测ID5",
+            "type": 0,
+            "link": 10,
+            "fieldName": "back_id_5",
+            "hide": false
+          },
+          {
+            "name": "回测ID6",
+            "type": 0,
+            "link": 12,
+            "fieldName": "back_id_6",
+            "hide": false
+          }
+        ],
+        "outputs": [
+          {
+            "name": "对比表(Markdown)",
+            "type": 0,
+            "links": [],
+            "fieldName": "summary_md",
+            "slot_index": 0
+          },
+          {
+            "name": "对比数据(JSON)",
+            "type": 0,
+            "links": [],
+            "fieldName": "summary_json",
+            "slot_index": 1
+          }
+        ],
+        "properties": {
+          "标签(逗号分隔)": "E-训练21H2-24,E-测试25-26H1,F-训练21H2-24,F-测试25-26H1,G-训练21H2-24,G-测试25-26H1",
+          "回测ID1": "",
+          "回测ID2": "",
+          "回测ID3": "",
+          "回测ID4": "",
+          "回测ID5": "",
+          "回测ID6": ""
+        }
+      }
+    ],
+    "links": [
+      [
+        1,
+        1,
+        0,
+        2,
+        0,
+        0
+      ],
+      [
+        2,
+        1,
+        0,
+        13,
+        1,
+        0
+      ],
+      [
+        3,
+        3,
+        0,
+        4,
+        0,
+        0
+      ],
+      [
+        4,
+        3,
+        0,
+        13,
+        2,
+        0
+      ],
+      [
+        5,
+        5,
+        0,
+        6,
+        0,
+        0
+      ],
+      [
+        6,
+        5,
+        0,
+        13,
+        3,
+        0
+      ],
+      [
+        7,
+        7,
+        0,
+        8,
+        0,
+        0
+      ],
+      [
+        8,
+        7,
+        0,
+        13,
+        4,
+        0
+      ],
+      [
+        9,
+        9,
+        0,
+        10,
+        0,
+        0
+      ],
+      [
+        10,
+        9,
+        0,
+        13,
+        5,
+        0
+      ],
+      [
+        11,
+        11,
+        0,
+        12,
+        0,
+        0
+      ],
+      [
+        12,
+        11,
+        0,
+        13,
+        6,
+        0
+      ]
+    ],
+    "groups": [
+      {
+        "title": "🧊 冻结代码验证 —— 无任何LLM,固定代码分段复跑;先看v1全区间能否复现319%/1.78",
+        "bounding": [
+          40,
+          0,
+          920,
+          1800
+        ],
+        "color": "#3f5f8f"
+      },
+      {
+        "title": "📊 汇总表(HTML报告也会自动落到 docker/reports/)",
+        "bounding": [
+          960,
+          640,
+          460,
+          400
+        ],
+        "color": "#7f5fa0"
+      }
+    ],
+    "config": {},
+    "extra": {},
+    "version": 0.4
+  }
+}
