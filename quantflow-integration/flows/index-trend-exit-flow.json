@@ -1,0 +1,740 @@
+{
+  "format_version": "1.0",
+  "name": "单资产牛市策略:趋势离场 vs 死拿(仅沪深300)",
+  "description": "回答'只谈沪深300、假设当下是牛市'的策略问题。牛市里没有操作能赢满仓持有(单资产长仓数学);策略的全部价值在牛市结束那天——B1=满仓+MA120±2%滞回机械离场线。预注册预期:牛市段B1≈B0;熊市段B1大幅少亏但要交横跳保费;判据=全周期终点与最深回撤(B0已知:全周期+2.3%/-37.1%)。预热期先持有(与'假设当下是牛市'一致)。读法:若B1全周期终点更高且回撤减半,它就是单资产腿的正确形态,可叠加进任意配置的股票腿。",
+  "litegraph": {
+    "last_node_id": 9,
+    "last_link_id": 8,
+    "nodes": [
+      {
+        "id": 1,
+        "type": "StockBacktestControl",
+        "title": "B1趋势离场版(仅沪深300) · 训练21H2-24",
+        "pos": [
+          80,
+          40
+        ],
+        "size": [
+          420,
+          340
+        ],
+        "flags": {
+          "uuid": "5c7621d8-552d-431a-9fad-bb6867cdf6df"
+        },
+        "order": 0,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "策略代码",
+            "type": 0,
+            "link": null,
+            "fieldName": "code",
+            "hide": false
+          },
+          {
+            "name": "因子值",
+            "type": 0,
+            "link": null,
+            "fieldName": "factors",
+            "hide": false
+          },
+          {
+            "name": "初始资金",
+            "type": 0,
+            "link": null,
+            "fieldName": "start_capital",
+            "hide": true
+          },
+          {
+            "name": "基准指数",
+            "type": 0,
+            "link": null,
+            "fieldName": "standard_symbol",
+            "hide": false
+          },
+          {
+            "name": "佣金率",
+            "type": 0,
+            "link": null,
+            "fieldName": "commission_rate",
+            "hide": true
+          },
+          {
+            "name": "回测频率",
+            "type": 0,
+            "link": null,
+            "fieldName": "frequency",
+            "hide": true
+          },
+          {
+            "name": "回测开始时间",
+            "type": 0,
+            "link": null,
+            "fieldName": "start_date",
+            "hide": true
+          },
+          {
+            "name": "回测结束时间",
+            "type": 0,
+            "link": null,
+            "fieldName": "end_date",
+            "hide": true
+          }
+        ],
+        "outputs": [
+          {
+            "name": "回测id",
+            "type": 0,
+            "links": [
+              1,
+              2
+            ],
+            "fieldName": "backtest_id",
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "策略代码": "# -*- coding: utf-8 -*-\n# B1 沪深300·趋势离场版 —— 单资产\"牛市策略\"的完整形态:\n# 满仓参与牛市 + 机械离场线(昨收跌破MA120×0.98清仓;重上MA120×1.02买回,\n# ±2%滞回防横跳)。性格:牛市≈满仓持有;转熊从高点回吐后离场躲过深渊主体;\n# 震荡市反复交\"保费\"(每次来回2-5%)。这是保险不是alpha。无前视:信号=昨收。\nfrom panda_backtest.api.api import *\nfrom panda_backtest.api.stock_api import *\nimport numpy as np\nimport pandas as pd\nimport datetime\n\nEQ, MA, BAND = '510300.SH', 120, 0.02\n\ndef initialize(context):\n    context.hist = {EQ: []}\n    context.holding = False\n\ndef handle_data(context, bar):\n    acc = context.stock_account_dict['8888']\n    h = context.hist.get(EQ, [])\n\n    # ===== 决策:只用截至昨收的 hist =====\n    if len(h) >= MA:\n        ma = sum(h[-MA:]) / MA\n        px = h[-1]\n        pos = acc.positions.get(EQ)\n        held = pos and pos.sellable > 0\n        if held and px < ma * (1 - BAND):\n            order_shares('8888', EQ, -pos.sellable, style=MarketOrderStyle)\n            context.holding = False\n            SRLogger.info('趋势离场:昨收%.3f跌破MA%d下带,清仓' % (px, MA))\n        elif not held and px > ma * (1 + BAND):\n            qty = int(acc.total_value * 0.98 / px / 100) * 100\n            if qty >= 100 and acc.cash >= qty * px:\n                order_shares('8888', EQ, qty, style=MarketOrderStyle)\n                context.holding = True\n                SRLogger.info('趋势入场:昨收%.3f站上MA%d上带,满仓' % (px, MA))\n    elif h and not context.holding:\n        # MA预热期:先持有(接受市场风险,与\"假设当下是牛市\"一致)\n        px = h[-1]\n        qty = int(acc.total_value * 0.98 / px / 100) * 100\n        if qty >= 100 and acc.cash >= qty * px:\n            order_shares('8888', EQ, qty, style=MarketOrderStyle)\n            context.holding = True\n            SRLogger.info('预热期先持有 %d股' % qty)\n\n    # ===== 收盘入库 =====\n    try:\n        b = bar[EQ]\n        if b is not None and getattr(b, 'close', None) not in (None, 0):\n            context.hist[EQ].append(b.close)\n            if len(context.hist[EQ]) > 250:\n                context.hist[EQ] = context.hist[EQ][-250:]\n    except Exception as e:\n        SRLogger.info('数据异常: %s' % e)\n",
+          "初始资金": 1000000,
+          "基准指数": "沪深300",
+          "佣金率": 1,
+          "回测频率": "1d",
+          "回测开始时间": "20210701",
+          "回测结束时间": "20241231"
+        }
+      },
+      {
+        "id": 2,
+        "type": "BackTestResultControl",
+        "title": "回测结果(点开看图)",
+        "pos": [
+          560,
+          40
+        ],
+        "size": [
+          320,
+          140
+        ],
+        "flags": {
+          "uuid": "baf4729b-ba16-4d52-a6dd-9a207b16b011"
+        },
+        "order": 1,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "回测任务",
+            "type": 0,
+            "link": 1,
+            "fieldName": "task_id",
+            "hide": false
+          }
+        ],
+        "outputs": [
+          {
+            "name": "图表绘制",
+            "type": 0,
+            "links": [],
+            "fieldName": "task_id",
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "回测任务": "error"
+        }
+      },
+      {
+        "id": 3,
+        "type": "StockBacktestControl",
+        "title": "B1趋势离场版(仅沪深300) · 测试25-26H1",
+        "pos": [
+          1060,
+          40
+        ],
+        "size": [
+          420,
+          340
+        ],
+        "flags": {
+          "uuid": "a9316506-4e6f-4cdc-80ea-62ad27a0a2d1"
+        },
+        "order": 2,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "策略代码",
+            "type": 0,
+            "link": null,
+            "fieldName": "code",
+            "hide": false
+          },
+          {
+            "name": "因子值",
+            "type": 0,
+            "link": null,
+            "fieldName": "factors",
+            "hide": false
+          },
+          {
+            "name": "初始资金",
+            "type": 0,
+            "link": null,
+            "fieldName": "start_capital",
+            "hide": true
+          },
+          {
+            "name": "基准指数",
+            "type": 0,
+            "link": null,
+            "fieldName": "standard_symbol",
+            "hide": false
+          },
+          {
+            "name": "佣金率",
+            "type": 0,
+            "link": null,
+            "fieldName": "commission_rate",
+            "hide": true
+          },
+          {
+            "name": "回测频率",
+            "type": 0,
+            "link": null,
+            "fieldName": "frequency",
+            "hide": true
+          },
+          {
+            "name": "回测开始时间",
+            "type": 0,
+            "link": null,
+            "fieldName": "start_date",
+            "hide": true
+          },
+          {
+            "name": "回测结束时间",
+            "type": 0,
+            "link": null,
+            "fieldName": "end_date",
+            "hide": true
+          }
+        ],
+        "outputs": [
+          {
+            "name": "回测id",
+            "type": 0,
+            "links": [
+              3,
+              4
+            ],
+            "fieldName": "backtest_id",
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "策略代码": "# -*- coding: utf-8 -*-\n# B1 沪深300·趋势离场版 —— 单资产\"牛市策略\"的完整形态:\n# 满仓参与牛市 + 机械离场线(昨收跌破MA120×0.98清仓;重上MA120×1.02买回,\n# ±2%滞回防横跳)。性格:牛市≈满仓持有;转熊从高点回吐后离场躲过深渊主体;\n# 震荡市反复交\"保费\"(每次来回2-5%)。这是保险不是alpha。无前视:信号=昨收。\nfrom panda_backtest.api.api import *\nfrom panda_backtest.api.stock_api import *\nimport numpy as np\nimport pandas as pd\nimport datetime\n\nEQ, MA, BAND = '510300.SH', 120, 0.02\n\ndef initialize(context):\n    context.hist = {EQ: []}\n    context.holding = False\n\ndef handle_data(context, bar):\n    acc = context.stock_account_dict['8888']\n    h = context.hist.get(EQ, [])\n\n    # ===== 决策:只用截至昨收的 hist =====\n    if len(h) >= MA:\n        ma = sum(h[-MA:]) / MA\n        px = h[-1]\n        pos = acc.positions.get(EQ)\n        held = pos and pos.sellable > 0\n        if held and px < ma * (1 - BAND):\n            order_shares('8888', EQ, -pos.sellable, style=MarketOrderStyle)\n            context.holding = False\n            SRLogger.info('趋势离场:昨收%.3f跌破MA%d下带,清仓' % (px, MA))\n        elif not held and px > ma * (1 + BAND):\n            qty = int(acc.total_value * 0.98 / px / 100) * 100\n            if qty >= 100 and acc.cash >= qty * px:\n                order_shares('8888', EQ, qty, style=MarketOrderStyle)\n                context.holding = True\n                SRLogger.info('趋势入场:昨收%.3f站上MA%d上带,满仓' % (px, MA))\n    elif h and not context.holding:\n        # MA预热期:先持有(接受市场风险,与\"假设当下是牛市\"一致)\n        px = h[-1]\n        qty = int(acc.total_value * 0.98 / px / 100) * 100\n        if qty >= 100 and acc.cash >= qty * px:\n            order_shares('8888', EQ, qty, style=MarketOrderStyle)\n            context.holding = True\n            SRLogger.info('预热期先持有 %d股' % qty)\n\n    # ===== 收盘入库 =====\n    try:\n        b = bar[EQ]\n        if b is not None and getattr(b, 'close', None) not in (None, 0):\n            context.hist[EQ].append(b.close)\n            if len(context.hist[EQ]) > 250:\n                context.hist[EQ] = context.hist[EQ][-250:]\n    except Exception as e:\n        SRLogger.info('数据异常: %s' % e)\n",
+          "初始资金": 1000000,
+          "基准指数": "沪深300",
+          "佣金率": 1,
+          "回测频率": "1d",
+          "回测开始时间": "20250101",
+          "回测结束时间": "20260630"
+        }
+      },
+      {
+        "id": 4,
+        "type": "BackTestResultControl",
+        "title": "回测结果(点开看图)",
+        "pos": [
+          1540,
+          40
+        ],
+        "size": [
+          320,
+          140
+        ],
+        "flags": {
+          "uuid": "53e1302f-43f7-46b4-a8cb-7744caab1792"
+        },
+        "order": 3,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "回测任务",
+            "type": 0,
+            "link": 3,
+            "fieldName": "task_id",
+            "hide": false
+          }
+        ],
+        "outputs": [
+          {
+            "name": "图表绘制",
+            "type": 0,
+            "links": [],
+            "fieldName": "task_id",
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "回测任务": "error"
+        }
+      },
+      {
+        "id": 5,
+        "type": "StockBacktestControl",
+        "title": "B0死拿不动(仅沪深300) · 训练21H2-24",
+        "pos": [
+          80,
+          460
+        ],
+        "size": [
+          420,
+          340
+        ],
+        "flags": {
+          "uuid": "704f9705-f73b-4606-807a-472abaf35b4a"
+        },
+        "order": 4,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "策略代码",
+            "type": 0,
+            "link": null,
+            "fieldName": "code",
+            "hide": false
+          },
+          {
+            "name": "因子值",
+            "type": 0,
+            "link": null,
+            "fieldName": "factors",
+            "hide": false
+          },
+          {
+            "name": "初始资金",
+            "type": 0,
+            "link": null,
+            "fieldName": "start_capital",
+            "hide": true
+          },
+          {
+            "name": "基准指数",
+            "type": 0,
+            "link": null,
+            "fieldName": "standard_symbol",
+            "hide": false
+          },
+          {
+            "name": "佣金率",
+            "type": 0,
+            "link": null,
+            "fieldName": "commission_rate",
+            "hide": true
+          },
+          {
+            "name": "回测频率",
+            "type": 0,
+            "link": null,
+            "fieldName": "frequency",
+            "hide": true
+          },
+          {
+            "name": "回测开始时间",
+            "type": 0,
+            "link": null,
+            "fieldName": "start_date",
+            "hide": true
+          },
+          {
+            "name": "回测结束时间",
+            "type": 0,
+            "link": null,
+            "fieldName": "end_date",
+            "hide": true
+          }
+        ],
+        "outputs": [
+          {
+            "name": "回测id",
+            "type": 0,
+            "links": [
+              5,
+              6
+            ],
+            "fieldName": "backtest_id",
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "策略代码": "# -*- coding: utf-8 -*-\n# B0 大盘持有 —— \"跑赢大盘\"的度量基准:第一天满仓买入沪深300ETF,永不动。\n# 任何策略号称跑赢大盘,必须在同一张表里赢它,不靠感觉。\nfrom panda_backtest.api.api import *\nfrom panda_backtest.api.stock_api import *\nimport numpy as np\nimport pandas as pd\nimport datetime\n\nEQ = '510300.SH'\n\ndef initialize(context):\n    context.hist = {EQ: []}\n    context.bought = False\n\ndef handle_data(context, bar):\n    acc = context.stock_account_dict['8888']\n    h = context.hist.get(EQ, [])\n    if not context.bought and h:                      # 第二天起按昨收定量,今开买入\n        px = h[-1]\n        qty = int(acc.total_value * 0.98 / px / 100) * 100\n        if qty >= 100 and acc.cash >= qty * px:\n            order_shares('8888', EQ, qty, style=MarketOrderStyle)\n            context.bought = True\n            SRLogger.info('满仓买入 %s %d股,此后不再交易' % (EQ, qty))\n    try:\n        b = bar[EQ]\n        if b is not None and getattr(b, 'close', None) not in (None, 0):\n            context.hist[EQ].append(b.close)\n            if len(context.hist[EQ]) > 250:\n                context.hist[EQ] = context.hist[EQ][-250:]\n    except Exception as e:\n        SRLogger.info('数据异常: %s' % e)\n",
+          "初始资金": 1000000,
+          "基准指数": "沪深300",
+          "佣金率": 1,
+          "回测频率": "1d",
+          "回测开始时间": "20210701",
+          "回测结束时间": "20241231"
+        }
+      },
+      {
+        "id": 6,
+        "type": "BackTestResultControl",
+        "title": "回测结果(点开看图)",
+        "pos": [
+          560,
+          460
+        ],
+        "size": [
+          320,
+          140
+        ],
+        "flags": {
+          "uuid": "e00bbbd6-cccd-4125-afbd-93b5ee6f123e"
+        },
+        "order": 5,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "回测任务",
+            "type": 0,
+            "link": 5,
+            "fieldName": "task_id",
+            "hide": false
+          }
+        ],
+        "outputs": [
+          {
+            "name": "图表绘制",
+            "type": 0,
+            "links": [],
+            "fieldName": "task_id",
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "回测任务": "error"
+        }
+      },
+      {
+        "id": 7,
+        "type": "StockBacktestControl",
+        "title": "B0死拿不动(仅沪深300) · 测试25-26H1",
+        "pos": [
+          1060,
+          460
+        ],
+        "size": [
+          420,
+          340
+        ],
+        "flags": {
+          "uuid": "ad3779fb-9cff-4a90-a579-d72df68d22cb"
+        },
+        "order": 6,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "策略代码",
+            "type": 0,
+            "link": null,
+            "fieldName": "code",
+            "hide": false
+          },
+          {
+            "name": "因子值",
+            "type": 0,
+            "link": null,
+            "fieldName": "factors",
+            "hide": false
+          },
+          {
+            "name": "初始资金",
+            "type": 0,
+            "link": null,
+            "fieldName": "start_capital",
+            "hide": true
+          },
+          {
+            "name": "基准指数",
+            "type": 0,
+            "link": null,
+            "fieldName": "standard_symbol",
+            "hide": false
+          },
+          {
+            "name": "佣金率",
+            "type": 0,
+            "link": null,
+            "fieldName": "commission_rate",
+            "hide": true
+          },
+          {
+            "name": "回测频率",
+            "type": 0,
+            "link": null,
+            "fieldName": "frequency",
+            "hide": true
+          },
+          {
+            "name": "回测开始时间",
+            "type": 0,
+            "link": null,
+            "fieldName": "start_date",
+            "hide": true
+          },
+          {
+            "name": "回测结束时间",
+            "type": 0,
+            "link": null,
+            "fieldName": "end_date",
+            "hide": true
+          }
+        ],
+        "outputs": [
+          {
+            "name": "回测id",
+            "type": 0,
+            "links": [
+              7,
+              8
+            ],
+            "fieldName": "backtest_id",
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "策略代码": "# -*- coding: utf-8 -*-\n# B0 大盘持有 —— \"跑赢大盘\"的度量基准:第一天满仓买入沪深300ETF,永不动。\n# 任何策略号称跑赢大盘,必须在同一张表里赢它,不靠感觉。\nfrom panda_backtest.api.api import *\nfrom panda_backtest.api.stock_api import *\nimport numpy as np\nimport pandas as pd\nimport datetime\n\nEQ = '510300.SH'\n\ndef initialize(context):\n    context.hist = {EQ: []}\n    context.bought = False\n\ndef handle_data(context, bar):\n    acc = context.stock_account_dict['8888']\n    h = context.hist.get(EQ, [])\n    if not context.bought and h:                      # 第二天起按昨收定量,今开买入\n        px = h[-1]\n        qty = int(acc.total_value * 0.98 / px / 100) * 100\n        if qty >= 100 and acc.cash >= qty * px:\n            order_shares('8888', EQ, qty, style=MarketOrderStyle)\n            context.bought = True\n            SRLogger.info('满仓买入 %s %d股,此后不再交易' % (EQ, qty))\n    try:\n        b = bar[EQ]\n        if b is not None and getattr(b, 'close', None) not in (None, 0):\n            context.hist[EQ].append(b.close)\n            if len(context.hist[EQ]) > 250:\n                context.hist[EQ] = context.hist[EQ][-250:]\n    except Exception as e:\n        SRLogger.info('数据异常: %s' % e)\n",
+          "初始资金": 1000000,
+          "基准指数": "沪深300",
+          "佣金率": 1,
+          "回测频率": "1d",
+          "回测开始时间": "20250101",
+          "回测结束时间": "20260630"
+        }
+      },
+      {
+        "id": 8,
+        "type": "BackTestResultControl",
+        "title": "回测结果(点开看图)",
+        "pos": [
+          1540,
+          460
+        ],
+        "size": [
+          320,
+          140
+        ],
+        "flags": {
+          "uuid": "02474c81-f9aa-4b75-89d0-31a8d82c8c15"
+        },
+        "order": 7,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "回测任务",
+            "type": 0,
+            "link": 7,
+            "fieldName": "task_id",
+            "hide": false
+          }
+        ],
+        "outputs": [
+          {
+            "name": "图表绘制",
+            "type": 0,
+            "links": [],
+            "fieldName": "task_id",
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "回测任务": "error"
+        }
+      },
+      {
+        "id": 9,
+        "type": "BacktestSummaryNode",
+        "title": "回测汇总表(自动)",
+        "pos": [
+          1000,
+          1000
+        ],
+        "size": [
+          380,
+          280
+        ],
+        "flags": {
+          "uuid": "178be574-82f6-4fb1-bd72-a7ca1a2c471f"
+        },
+        "order": 8,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "标签(逗号分隔)",
+            "type": 0,
+            "link": null,
+            "fieldName": "labels",
+            "hide": false
+          },
+          {
+            "name": "回测ID1",
+            "type": 0,
+            "link": 2,
+            "fieldName": "back_id_1",
+            "hide": false
+          },
+          {
+            "name": "回测ID2",
+            "type": 0,
+            "link": 4,
+            "fieldName": "back_id_2",
+            "hide": false
+          },
+          {
+            "name": "回测ID3",
+            "type": 0,
+            "link": 6,
+            "fieldName": "back_id_3",
+            "hide": false
+          },
+          {
+            "name": "回测ID4",
+            "type": 0,
+            "link": 8,
+            "fieldName": "back_id_4",
+            "hide": false
+          },
+          {
+            "name": "回测ID5",
+            "type": 0,
+            "link": null,
+            "fieldName": "back_id_5",
+            "hide": false
+          },
+          {
+            "name": "回测ID6",
+            "type": 0,
+            "link": null,
+            "fieldName": "back_id_6",
+            "hide": false
+          }
+        ],
+        "outputs": [
+          {
+            "name": "对比表(Markdown)",
+            "type": 0,
+            "links": [],
+            "fieldName": "summary_md",
+            "slot_index": 0
+          },
+          {
+            "name": "对比数据(JSON)",
+            "type": 0,
+            "links": [],
+            "fieldName": "summary_json",
+            "slot_index": 1
+          }
+        ],
+        "properties": {
+          "标签(逗号分隔)": "B1趋势离场版-训练21H2-24,B1趋势离场版-测试25-26H1,B0死拿不动-训练21H2-24,B0死拿不动-测试25-26H1",
+          "回测ID1": "",
+          "回测ID2": "",
+          "回测ID3": "",
+          "回测ID4": "",
+          "回测ID5": "",
+          "回测ID6": ""
+        }
+      }
+    ],
+    "links": [
+      [
+        1,
+        1,
+        0,
+        2,
+        0,
+        0
+      ],
+      [
+        2,
+        1,
+        0,
+        9,
+        1,
+        0
+      ],
+      [
+        3,
+        3,
+        0,
+        4,
+        0,
+        0
+      ],
+      [
+        4,
+        3,
+        0,
+        9,
+        2,
+        0
+      ],
+      [
+        5,
+        5,
+        0,
+        6,
+        0,
+        0
+      ],
+      [
+        6,
+        5,
+        0,
+        9,
+        3,
+        0
+      ],
+      [
+        7,
+        7,
+        0,
+        8,
+        0,
+        0
+      ],
+      [
+        8,
+        7,
+        0,
+        9,
+        4,
+        0
+      ]
+    ],
+    "groups": [
+      {
+        "title": "🧊 冻结代码验证 —— 无任何LLM,固定代码分段复跑;先看v1全区间能否复现319%/1.78",
+        "bounding": [
+          40,
+          0,
+          920,
+          1800
+        ],
+        "color": "#3f5f8f"
+      },
+      {
+        "title": "📊 汇总表(HTML报告也会自动落到 docker/reports/)",
+        "bounding": [
+          960,
+          640,
+          460,
+          400
+        ],
+        "color": "#7f5fa0"
+      }
+    ],
+    "config": {},
+    "extra": {},
+    "version": 0.4
+  }
+}
