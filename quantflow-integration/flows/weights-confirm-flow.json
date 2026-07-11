@@ -1,0 +1,436 @@
+{
+  "format_version": "1.0",
+  "name": "权重确认:防守方向的一次性测试窗验证",
+  "description": "敏感性高原分析显示训练窗(熊市年份)中防守方向单调更优,按赛前规则允许对保守30/50/20与重金35/35/30做【一次性】测试窗确认。对照:P1基准测试窗+16.44%/回撤-8.30%(年化÷回撤=1.35)。读法:确认变体的比值≥1.2×P1才值得换(训练窗优势已知来自熊市年份,测试窗打平即可接受换仓位偏好);两个都明显差→保持40/40/20。⚠ 本流程只准跑一次、看一次,不许再回去改权重重试——那就是把测试窗污染成训练窗。",
+  "litegraph": {
+    "last_node_id": 5,
+    "last_link_id": 4,
+    "nodes": [
+      {
+        "id": 1,
+        "type": "StockBacktestControl",
+        "title": "保守30/50/20 · 测试窗确认(只看一次!)",
+        "pos": [
+          80,
+          40
+        ],
+        "size": [
+          420,
+          340
+        ],
+        "flags": {
+          "uuid": "aa5d1073-d6bf-4829-b180-6e8bfc83efce"
+        },
+        "order": 0,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "策略代码",
+            "type": 0,
+            "link": null,
+            "fieldName": "code",
+            "hide": false
+          },
+          {
+            "name": "因子值",
+            "type": 0,
+            "link": null,
+            "fieldName": "factors",
+            "hide": false
+          },
+          {
+            "name": "初始资金",
+            "type": 0,
+            "link": null,
+            "fieldName": "start_capital",
+            "hide": true
+          },
+          {
+            "name": "基准指数",
+            "type": 0,
+            "link": null,
+            "fieldName": "standard_symbol",
+            "hide": false
+          },
+          {
+            "name": "佣金率",
+            "type": 0,
+            "link": null,
+            "fieldName": "commission_rate",
+            "hide": true
+          },
+          {
+            "name": "回测频率",
+            "type": 0,
+            "link": null,
+            "fieldName": "frequency",
+            "hide": true
+          },
+          {
+            "name": "回测开始时间",
+            "type": 0,
+            "link": null,
+            "fieldName": "start_date",
+            "hide": true
+          },
+          {
+            "name": "回测结束时间",
+            "type": 0,
+            "link": null,
+            "fieldName": "end_date",
+            "hide": true
+          }
+        ],
+        "outputs": [
+          {
+            "name": "回测id",
+            "type": 0,
+            "links": [
+              1,
+              2
+            ],
+            "fieldName": "backtest_id",
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "策略代码": "# -*- coding: utf-8 -*-\n# P1 静态配置·月再平衡 —— 「诚实基准」:不预测任何东西,股/债/金 40/40/20,\n# 每月首个交易日回到目标权重(偏离超总资产2%才动,防无谓换手)。\n# 它的意义:任何\"策略\"打不过它,就没有资格上实盘。无前视:定量用昨收,今开成交。\nfrom panda_backtest.api.api import *\nfrom panda_backtest.api.stock_api import *\nimport numpy as np\nimport pandas as pd\nimport datetime\n\nW = {'510300.SH': 0.30, '511260.SH': 0.50, '518880.SH': 0.20}\n\ndef initialize(context):\n    context.hist = {s: [] for s in W}\n    context.prev_month = None\n\ndef handle_data(context, bar):\n    acc = context.stock_account_dict['8888']\n    try:\n        dt = datetime.datetime.strptime(str(context.trade_date), '%Y%m%d')\n        cur_month = (dt.year, dt.month)\n    except:\n        cur_month = None\n\n    # ===== 决策:只用截至昨收的 hist =====\n    last = {s: context.hist[s][-1] for s in context.hist if context.hist.get(s)}\n    rebal = cur_month is not None and cur_month != context.prev_month\n    if cur_month is not None:\n        context.prev_month = cur_month\n\n    if rebal and all(s in last for s in W):\n        total = acc.total_value\n        # 先卖后买,腾出资金\n        orders = []\n        for s, w in W.items():\n            pos = acc.positions.get(s)\n            cur_qty = pos.sellable if pos else 0\n            tgt_qty = int(total * w / last[s] / 100) * 100\n            delta = tgt_qty - cur_qty\n            if abs(delta) * last[s] < total * 0.02 or abs(delta) < 100:\n                continue   # 偏离<2%不动\n            orders.append((s, delta))\n        for s, delta in sorted(orders, key=lambda x: x[1]):   # 负的(卖)在前\n            if delta < 0:\n                order_shares('8888', s, delta, style=MarketOrderStyle)\n                SRLogger.info('再平衡卖出 %s %d股' % (s, -delta))\n            elif acc.cash >= delta * last[s]:\n                order_shares('8888', s, delta, style=MarketOrderStyle)\n                SRLogger.info('再平衡买入 %s %d股' % (s, delta))\n            else:\n                SRLogger.info('想买 %s 但现金不足' % s)\n\n    # ===== 收盘入库 =====\n    for s in list(context.hist.keys()):\n        try:\n            b = bar[s]\n            if b is None or getattr(b, 'close', None) in (None, 0):\n                continue\n            context.hist[s].append(b.close)\n            if len(context.hist[s]) > 250:\n                context.hist[s] = context.hist[s][-250:]\n        except Exception as e:\n            SRLogger.info('数据异常 %s: %s' % (s, e))\n            continue\n",
+          "初始资金": 1000000,
+          "基准指数": "沪深300",
+          "佣金率": 1,
+          "回测频率": "1d",
+          "回测开始时间": "20250101",
+          "回测结束时间": "20260630"
+        }
+      },
+      {
+        "id": 2,
+        "type": "BackTestResultControl",
+        "title": "回测结果(点开看图)",
+        "pos": [
+          560,
+          40
+        ],
+        "size": [
+          320,
+          140
+        ],
+        "flags": {
+          "uuid": "10d0310b-00d1-4615-833d-e353c7524da3"
+        },
+        "order": 2,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "回测任务",
+            "type": 0,
+            "link": 1,
+            "fieldName": "task_id",
+            "hide": false
+          }
+        ],
+        "outputs": [
+          {
+            "name": "图表绘制",
+            "type": 0,
+            "links": [],
+            "fieldName": "task_id",
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "回测任务": "error"
+        }
+      },
+      {
+        "id": 3,
+        "type": "StockBacktestControl",
+        "title": "重金35/35/30 · 测试窗确认(只看一次!)",
+        "pos": [
+          80,
+          440
+        ],
+        "size": [
+          420,
+          340
+        ],
+        "flags": {
+          "uuid": "6aa0422d-c510-43de-b72f-3e0750ef3519"
+        },
+        "order": 1,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "策略代码",
+            "type": 0,
+            "link": null,
+            "fieldName": "code",
+            "hide": false
+          },
+          {
+            "name": "因子值",
+            "type": 0,
+            "link": null,
+            "fieldName": "factors",
+            "hide": false
+          },
+          {
+            "name": "初始资金",
+            "type": 0,
+            "link": null,
+            "fieldName": "start_capital",
+            "hide": true
+          },
+          {
+            "name": "基准指数",
+            "type": 0,
+            "link": null,
+            "fieldName": "standard_symbol",
+            "hide": false
+          },
+          {
+            "name": "佣金率",
+            "type": 0,
+            "link": null,
+            "fieldName": "commission_rate",
+            "hide": true
+          },
+          {
+            "name": "回测频率",
+            "type": 0,
+            "link": null,
+            "fieldName": "frequency",
+            "hide": true
+          },
+          {
+            "name": "回测开始时间",
+            "type": 0,
+            "link": null,
+            "fieldName": "start_date",
+            "hide": true
+          },
+          {
+            "name": "回测结束时间",
+            "type": 0,
+            "link": null,
+            "fieldName": "end_date",
+            "hide": true
+          }
+        ],
+        "outputs": [
+          {
+            "name": "回测id",
+            "type": 0,
+            "links": [
+              3,
+              4
+            ],
+            "fieldName": "backtest_id",
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "策略代码": "# -*- coding: utf-8 -*-\n# P1 静态配置·月再平衡 —— 「诚实基准」:不预测任何东西,股/债/金 40/40/20,\n# 每月首个交易日回到目标权重(偏离超总资产2%才动,防无谓换手)。\n# 它的意义:任何\"策略\"打不过它,就没有资格上实盘。无前视:定量用昨收,今开成交。\nfrom panda_backtest.api.api import *\nfrom panda_backtest.api.stock_api import *\nimport numpy as np\nimport pandas as pd\nimport datetime\n\nW = {'510300.SH': 0.35, '511260.SH': 0.35, '518880.SH': 0.30}\n\ndef initialize(context):\n    context.hist = {s: [] for s in W}\n    context.prev_month = None\n\ndef handle_data(context, bar):\n    acc = context.stock_account_dict['8888']\n    try:\n        dt = datetime.datetime.strptime(str(context.trade_date), '%Y%m%d')\n        cur_month = (dt.year, dt.month)\n    except:\n        cur_month = None\n\n    # ===== 决策:只用截至昨收的 hist =====\n    last = {s: context.hist[s][-1] for s in context.hist if context.hist.get(s)}\n    rebal = cur_month is not None and cur_month != context.prev_month\n    if cur_month is not None:\n        context.prev_month = cur_month\n\n    if rebal and all(s in last for s in W):\n        total = acc.total_value\n        # 先卖后买,腾出资金\n        orders = []\n        for s, w in W.items():\n            pos = acc.positions.get(s)\n            cur_qty = pos.sellable if pos else 0\n            tgt_qty = int(total * w / last[s] / 100) * 100\n            delta = tgt_qty - cur_qty\n            if abs(delta) * last[s] < total * 0.02 or abs(delta) < 100:\n                continue   # 偏离<2%不动\n            orders.append((s, delta))\n        for s, delta in sorted(orders, key=lambda x: x[1]):   # 负的(卖)在前\n            if delta < 0:\n                order_shares('8888', s, delta, style=MarketOrderStyle)\n                SRLogger.info('再平衡卖出 %s %d股' % (s, -delta))\n            elif acc.cash >= delta * last[s]:\n                order_shares('8888', s, delta, style=MarketOrderStyle)\n                SRLogger.info('再平衡买入 %s %d股' % (s, delta))\n            else:\n                SRLogger.info('想买 %s 但现金不足' % s)\n\n    # ===== 收盘入库 =====\n    for s in list(context.hist.keys()):\n        try:\n            b = bar[s]\n            if b is None or getattr(b, 'close', None) in (None, 0):\n                continue\n            context.hist[s].append(b.close)\n            if len(context.hist[s]) > 250:\n                context.hist[s] = context.hist[s][-250:]\n        except Exception as e:\n            SRLogger.info('数据异常 %s: %s' % (s, e))\n            continue\n",
+          "初始资金": 1000000,
+          "基准指数": "沪深300",
+          "佣金率": 1,
+          "回测频率": "1d",
+          "回测开始时间": "20250101",
+          "回测结束时间": "20260630"
+        }
+      },
+      {
+        "id": 4,
+        "type": "BackTestResultControl",
+        "title": "回测结果(点开看图)",
+        "pos": [
+          560,
+          440
+        ],
+        "size": [
+          320,
+          140
+        ],
+        "flags": {
+          "uuid": "b7608785-86ff-4473-b93e-b39fbb0c0163"
+        },
+        "order": 3,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "回测任务",
+            "type": 0,
+            "link": 3,
+            "fieldName": "task_id",
+            "hide": false
+          }
+        ],
+        "outputs": [
+          {
+            "name": "图表绘制",
+            "type": 0,
+            "links": [],
+            "fieldName": "task_id",
+            "slot_index": 0
+          }
+        ],
+        "properties": {
+          "回测任务": "error"
+        }
+      },
+      {
+        "id": 5,
+        "type": "BacktestSummaryNode",
+        "title": "回测汇总表(自动)",
+        "pos": [
+          1000,
+          700
+        ],
+        "size": [
+          380,
+          280
+        ],
+        "flags": {
+          "uuid": "5980f708-faa3-47ca-b800-2cda14f8fc49"
+        },
+        "order": 4,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "标签(逗号分隔)",
+            "type": 0,
+            "link": null,
+            "fieldName": "labels",
+            "hide": false
+          },
+          {
+            "name": "回测ID1",
+            "type": 0,
+            "link": 2,
+            "fieldName": "back_id_1",
+            "hide": false
+          },
+          {
+            "name": "回测ID2",
+            "type": 0,
+            "link": 4,
+            "fieldName": "back_id_2",
+            "hide": false
+          },
+          {
+            "name": "回测ID3",
+            "type": 0,
+            "link": null,
+            "fieldName": "back_id_3",
+            "hide": false
+          },
+          {
+            "name": "回测ID4",
+            "type": 0,
+            "link": null,
+            "fieldName": "back_id_4",
+            "hide": false
+          },
+          {
+            "name": "回测ID5",
+            "type": 0,
+            "link": null,
+            "fieldName": "back_id_5",
+            "hide": false
+          },
+          {
+            "name": "回测ID6",
+            "type": 0,
+            "link": null,
+            "fieldName": "back_id_6",
+            "hide": false
+          }
+        ],
+        "outputs": [
+          {
+            "name": "对比表(Markdown)",
+            "type": 0,
+            "links": [],
+            "fieldName": "summary_md",
+            "slot_index": 0
+          },
+          {
+            "name": "对比数据(JSON)",
+            "type": 0,
+            "links": [],
+            "fieldName": "summary_json",
+            "slot_index": 1
+          }
+        ],
+        "properties": {
+          "标签(逗号分隔)": "保守30/50/20-测试窗,重金35/35/30-测试窗",
+          "回测ID1": "",
+          "回测ID2": "",
+          "回测ID3": "",
+          "回测ID4": "",
+          "回测ID5": "",
+          "回测ID6": ""
+        }
+      }
+    ],
+    "links": [
+      [
+        1,
+        1,
+        0,
+        2,
+        0,
+        0
+      ],
+      [
+        2,
+        1,
+        0,
+        5,
+        1,
+        0
+      ],
+      [
+        3,
+        3,
+        0,
+        4,
+        0,
+        0
+      ],
+      [
+        4,
+        3,
+        0,
+        5,
+        2,
+        0
+      ]
+    ],
+    "groups": [
+      {
+        "title": "🧊 冻结代码验证 —— 无任何LLM,固定代码分段复跑;先看v1全区间能否复现319%/1.78",
+        "bounding": [
+          40,
+          0,
+          920,
+          1800
+        ],
+        "color": "#3f5f8f"
+      },
+      {
+        "title": "📊 汇总表(HTML报告也会自动落到 docker/reports/)",
+        "bounding": [
+          960,
+          640,
+          460,
+          400
+        ],
+        "color": "#7f5fa0"
+      }
+    ],
+    "config": {},
+    "extra": {},
+    "version": 0.4
+  }
+}
