@@ -100,10 +100,21 @@ def build_app():
             sym = request.query_params.get("symbol", "all")
             return JSONResponse(await run_in_threadpool(_dash.news, sym))
 
+        async def _dash_screen(request):
+            from fastapi.concurrency import run_in_threadpool
+            return JSONResponse(await run_in_threadpool(_dash.screen))
+
+        async def _dash_detail(request):
+            from fastapi.concurrency import run_in_threadpool
+            sym = request.query_params.get("symbol", "")
+            return JSONResponse(await run_in_threadpool(_dash.detail, sym))
+
         app.add_route("/dash", _dash_page, methods=["GET"])
         app.add_route("/dash/data", _dash_data, methods=["GET"])
         app.add_route("/dash/quotes", _dash_quotes, methods=["GET"])
         app.add_route("/dash/news", _dash_news, methods=["GET"])
+        app.add_route("/dash/screen", _dash_screen, methods=["GET"])
+        app.add_route("/dash/detail", _dash_detail, methods=["GET"])
         print("  统一工作台 -> http://127.0.0.1:8000/dash")
     except Exception as exc:
         print(f"[warn] /dash 看板挂载失败(不影响平台): {exc}")

@@ -51,6 +51,13 @@ services:
       DEEPSEEK_API_KEY: "${DEEPSEEK_API_KEY:-}"     # 可选：AI 顾问节点的 DeepSeek 后端(国内好开通)
       HT_APIKEY: "${HT_APIKEY:-}"                   # 只读看板查华泰挂单/持仓用(不下单;quantflow 无 HTSC_LIVE)
       MATCHING_TYPE: "${MATCHING_TYPE:-1}"          # 回测撮合:1=当日开盘(默认) 0=当日收盘(尾盘执行对照)
+      # ↓仅供看板「系统」页展示引擎状态(与 reviewer 保持同值);不参与任何交易逻辑
+      SIGNAL_ENGINE: "${SIGNAL_ENGINE:-alloc_p1}"
+      ALLOC_WEIGHTS: "${ALLOC_WEIGHTS:-510300.SH:0.40,511260.SH:0.40,518880.SH:0.20}"
+      PAPER_TOTAL: "${PAPER_TOTAL:-1000000}"
+      HTSC_LIVE: "${HTSC_LIVE:-0}"
+      PROVIDER: "${PROVIDER:-deepseek}"
+      FULL_AUTH: "${FULL_AUTH:-0}"
       BACKTEST_SLIPPAGE: "${BACKTEST_SLIPPAGE:-0}"  # 回测每边滑点比例(0.001=0.1%);平台原硬编码0,偏乐观
       # 代理（可选）：国内直连 api.anthropic.com 不通时，把宿主机代理透传给容器。
       # Docker Desktop(Win/Mac) 用 host.docker.internal 指宿主机，如 http://host.docker.internal:7890
