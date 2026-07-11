@@ -482,6 +482,19 @@ def main():
             sys.exit(1)
         all_syms = [s for _, _, syms in batches for s in syms]
         print(f"[全量] 共 {len(all_syms)} 只(股票+ETF),区间 {start} ~ {end}")
+        # 前端「自选管理」加的标的存在 Mongo(user_watchlist),也并入全量更新
+        try:
+            wdb = mongo_db()
+            manual = [(w["symbol"], w.get("asset_type") == "etf")
+                      for w in wdb["user_watchlist"].find({}, {"symbol": 1, "asset_type": 1})
+                      if w.get("symbol") and w["symbol"] not in seen]
+            for sym, etf in manual:
+                batches.append((f"前端自选:{sym}", etf, [sym]))
+                all_syms.append(sym)
+            if manual:
+                print(f"[全量] 另有前端自选 {len(manual)} 只并入")
+        except Exception as e:
+            print(f"[全量][WARN] 读取前端自选失败(跳过):{e}")
     else:
         symbols = read_watchlist()
         if not symbols:
