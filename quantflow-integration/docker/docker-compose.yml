@@ -69,6 +69,11 @@ services:
       - "127.0.0.1:8000:8000"    # 只绑本机，外部访问不到
     volumes:
       - "./reports:/reports"     # 回测汇总表等 HTML 报告落到宿主机 docker/reports/
+      # Routine 调度器进程内跑复核官,名单文件也要看得见(alloc 引擎其实不依赖)
+      - "./watchlist.txt:/data/watchlist.txt:ro"
+      - "./watchlist-etf.txt:/data/watchlist-etf.txt:ro"
+      - "./watchlist-etf-broad.txt:/data/watchlist-etf-broad.txt:ro"
+      - "./watchlist-smartbeta.txt:/data/watchlist-smartbeta.txt:ro"
     restart: unless-stopped
 
   # 数据导入器：把 watchlist.txt 里的自选股行情用 akshare 灌进 Mongo。

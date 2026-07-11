@@ -525,6 +525,10 @@ code,kbd{background:#0d1320;border:1px solid var(--line);border-radius:4px;paddi
 
 <section id=system>
   <div class=grid>
+    <div class="card full"><h2>定时任务(Routine) <span class=sub id=j_state></span></h2>
+      <div id=j_table>加载中…</div>
+      <pre id=j_log style="display:none;margin-top:10px;max-height:280px;overflow:auto"></pre>
+    </div>
     <div class=card><h2>现役引擎</h2><div id=y_engine></div></div>
     <div class=card><h2>数据库概况</h2><div id=y_db></div></div>
     <div class="card full"><h2>日常命令速查 <span class=sub>(cmd 窗口,在 docker/ 目录下)</span></h2>
@@ -816,12 +820,46 @@ function renderNews(n){
     `<span class=sub> · ${esc(x.source)}</span></div>`).join('')||'<div class=sub>暂无资讯</div>';
 }
 
+// ---- 定时任务(Routine) ----
+async function loadJobs(){
+  const r=await fetch('/dash/jobs');const j=await r.json();
+  const st=document.getElementById('j_state');
+  if(!j.ok){document.getElementById('j_table').innerHTML=`<div class=err>${esc(j.error||'')}</div>`;return}
+  st.textContent=j.scheduler_on?'(调度器运行中·任务默认停用,想自动化就打开开关)':'(调度器已被 SCHEDULER=0 停用)';
+  const rows=(j.rows||[]).map(x=>{
+    const ic={ok:'✅',fail:'❌',running:'⏳'}[x.last_status]||'—';
+    return `<tr><td class=l><b>${esc(x.name)}</b></td>`+
+      `<td><a href=# class=jtime data-id="${esc(x.id)}" data-t="${esc(x.time)}">${esc(x.time)}</a></td>`+
+      `<td>${x.trading_days_only?'仅交易日':'每天'}</td>`+
+      `<td><button class=jtoggle data-id="${esc(x.id)}" data-en="${x.enabled?1:0}">${x.enabled?'🟢 开':'⚪ 关'}</button></td>`+
+      `<td class=l>${esc(x.last_run||'—')} ${ic} <span class=sub>${x.last_duration_s?x.last_duration_s+'s':''}</span></td>`+
+      `<td><button class=jrun data-id="${esc(x.id)}">立即运行</button> `+
+      `<button class=jlog data-id="${esc(x.id)}">日志</button></td></tr>`}).join('');
+  document.getElementById('j_table').innerHTML=
+    `<table><tr><th class=l>任务</th><th>时间</th><th>日历</th><th>开关</th><th class=l>上次运行</th><th>操作</th></tr>${rows}</table>`;
+  document.querySelectorAll('.jtoggle').forEach(b=>b.onclick=async()=>{
+    await fetch(`/dash/jobs/update?id=${b.dataset.id}&enabled=${b.dataset.en==='1'?'0':'1'}`,{method:'POST'});loadJobs()});
+  document.querySelectorAll('.jrun').forEach(b=>b.onclick=async()=>{
+    b.disabled=true;await fetch(`/dash/jobs/run?id=${b.dataset.id}`,{method:'POST'});
+    setTimeout(loadJobs,1500);setTimeout(loadJobs,6000)});
+  document.querySelectorAll('.jlog').forEach(b=>b.onclick=async()=>{
+    const d=await(await fetch(`/dash/jobs/log?id=${b.dataset.id}`)).json();
+    const pre=document.getElementById('j_log');
+    pre.style.display='block';pre.textContent=`[${b.dataset.id}] ${d.status||''}\n`+(d.log||'')});
+  document.querySelectorAll('.jtime').forEach(a=>a.onclick=e=>{
+    e.preventDefault();
+    const t=prompt('执行时间(HH:MM,24小时制)',a.dataset.t);
+    if(t&&/^\d{1,2}:\d{2}$/.test(t.trim()))
+      fetch(`/dash/jobs/update?id=${a.dataset.id}&time=${encodeURIComponent(t.trim())}`,{method:'POST'}).then(loadJobs)});
+}
+
 // ---- 导航 ----
 function go(tab){
   document.querySelectorAll('nav a.tab').forEach(x=>x.classList.toggle('on',x.dataset.t===tab));
   document.querySelectorAll('main section').forEach(x=>x.classList.toggle('on',x.id===tab));
   if(tab==='screen'){loadScreen();loadWatch()}
   if(tab==='news')loadNews();
+  if(tab==='system')loadJobs();
   history.replaceState(null,'','#'+tab);
 }
 document.querySelectorAll('nav a.tab').forEach(a=>a.onclick=e=>{e.preventDefault();go(a.dataset.t)});

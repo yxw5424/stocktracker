@@ -278,6 +278,48 @@ def patched_dashboard(tmp_reports):
     md.add_symbol, md.remove_symbol, md.incremental_update = add_symbol, remove_symbol, incremental_update
     dash._market_data = lambda: md
 
+    # Routine 定时任务夹具(内存态,支持开关/改时间/立即运行全链路)
+    jobs = [
+        {"id": "refresh", "name": "行情增量更新", "task": "refresh", "time": "15:20",
+         "trading_days_only": True, "enabled": True, "last_run": "2026-07-10 15:20:03",
+         "last_status": "ok", "last_duration_s": 42.5, "last_log": "15:20:45 完成:13只,新增13条,失败0只"},
+        {"id": "review", "name": "AI复核官(月初再平衡/每日快照)", "task": "review", "time": "15:40",
+         "trading_days_only": True, "enabled": False, "last_run": "", "last_status": "", "last_log": ""},
+        {"id": "backup", "name": "轻量备份(决策/权益/对账→/reports/backups)", "task": "backup_lite",
+         "time": "20:00", "trading_days_only": False, "enabled": True,
+         "last_run": "2026-07-10 20:00:01", "last_status": "ok", "last_duration_s": 0.4,
+         "last_log": "20:00:01 已备份 512 条记录 -> /reports/backups/core_20260710_2000.json.gz"}]
+    dash._DEV_JOBS = jobs
+
+    def jobs_list():
+        return {"ok": True, "rows": jobs, "scheduler_on": True}
+
+    def job_update(jid, enabled=None, time_str=None, tdo=None):
+        for j in jobs:
+            if j["id"] == jid:
+                if enabled is not None:
+                    j["enabled"] = enabled in (True, "1", "true")
+                if time_str:
+                    j["time"] = time_str
+        return {"ok": True}
+
+    def job_run_now(jid):
+        for j in jobs:
+            if j["id"] == jid:
+                j["last_status"] = "ok"
+                j["last_run"] = "2026-07-11 09:00:00"
+                j["last_duration_s"] = 1.2
+                j["last_log"] = "09:00:01 (夹具)立即运行完成"
+        return {"ok": True, "id": jid, "note": "已触发"}
+
+    def job_log(jid):
+        for j in jobs:
+            if j["id"] == jid:
+                return {"ok": True, "id": jid, "log": j.get("last_log", ""), "status": j.get("last_status", "")}
+        return {"ok": False, "error": "不存在"}
+
+    dash._dev_jobs_api = (jobs_list, job_update, job_run_now, job_log)
+
     # 资讯:预填缓存,离线可用
     now = __import__("time").time()
     for sym, name in list(NAMES.items())[:6]:
@@ -326,6 +368,10 @@ def serve(port=18200):
                 self._json(dash.watchlist())
             elif u.path == "/dash/refresh/status":
                 self._json(dash.refresh_status())
+            elif u.path == "/dash/jobs":
+                self._json(dash._dev_jobs_api[0]())
+            elif u.path == "/dash/jobs/log":
+                self._json(dash._dev_jobs_api[3](q.get("id", "")))
             elif u.path.startswith("/reports/"):
                 p = os.path.join(tmp, os.path.basename(u.path))
                 if os.path.exists(p):
@@ -347,6 +393,10 @@ def serve(port=18200):
                 self._json(dash.watchlist_remove(q.get("symbol", "")))
             elif u.path == "/dash/refresh":
                 self._json(dash.refresh_start())
+            elif u.path == "/dash/jobs/update":
+                self._json(dash._dev_jobs_api[1](q.get("id", ""), q.get("enabled"), q.get("time")))
+            elif u.path == "/dash/jobs/run":
+                self._json(dash._dev_jobs_api[2](q.get("id", "")))
             else:
                 self.send_response(404); self.end_headers()
 

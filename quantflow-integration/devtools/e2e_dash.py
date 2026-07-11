@@ -86,9 +86,18 @@ def main():
         chk("报告-列表", "review_20260710.md" in pg.inner_text("#r_md"))
         shot("07_reports.png")
 
-        pg.click("a[data-t=system]"); pg.wait_for_timeout(300)
+        pg.click("a[data-t=system]"); pg.wait_for_timeout(400)
         chk("系统-引擎", "alloc_p1" in pg.inner_text("#y_engine"))
         chk("系统-数据", "20" in pg.inner_text("#y_db"))
+        # Routine 定时任务
+        chk("任务-列表", "行情增量更新" in pg.inner_text("#j_table"))
+        chk("任务-状态", "✅" in pg.inner_text("#j_table"))
+        pg.click(".jtoggle[data-id=review]"); pg.wait_for_timeout(300)
+        chk("任务-开关", "🟢 开" in pg.inner_text("#j_table"))
+        pg.click(".jrun[data-id=refresh]"); pg.wait_for_timeout(1800)
+        chk("任务-立即运行", "2026-07-11 09:00:00" in pg.inner_text("#j_table"), pg.inner_text("#j_table")[:200])
+        pg.click(".jlog[data-id=backup]"); pg.wait_for_timeout(200)
+        chk("任务-日志", "core_20260710" in pg.inner_text("#j_log"))
         shot("08_system.png")
         b.close()
 
