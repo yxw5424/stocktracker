@@ -60,7 +60,7 @@ def bare(sym: str) -> str:
 
 
 # 已知 20% 涨跌幅的非588 ETF(跟踪创业板类指数);可用 ETF20 环境变量追加
-_ETF20_BUILTIN = {"159915", "159952", "159948", "159957"}
+_ETF20_BUILTIN = {"159915", "159952", "159948", "159957", "159966", "159967"}
 
 
 def limit_band(sym: str, is_etf: bool) -> float:
@@ -100,6 +100,7 @@ _ALL_LISTS = [
     ("/data/watchlist-kechuang-semi.txt", False),
     ("/data/watchlist-etf.txt", True),
     ("/data/watchlist-etf-broad.txt", True),
+    ("/data/watchlist-smartbeta.txt", True),
 ]
 
 
