@@ -30,11 +30,17 @@ def norm_symbol(code):
         return ""
     if "." in code:
         return code
+    if code.isalpha():                # 字母代码=美股 ticker(AAPL→AAPL.US)
+        return code + ".US"
     if code[0] == "8" or code[:3] in ("920", "430"):
         return code + ".BJ"
     if code[0] in ("5", "6", "9"):
         return code + ".SH"
     return code + ".SZ"
+
+
+def is_us(sym):
+    return str(sym).upper().endswith(".US")
 
 
 def bare(sym):
@@ -48,6 +54,8 @@ def is_etf(sym):
 
 def limit_band(sym, etf):
     b = bare(sym)
+    if is_us(sym):
+        return 0.90                   # 美股无涨跌停;写±90%宽带让引擎校验形同虚设
     if etf:
         etf20 = _ETF20_BUILTIN | {x.strip() for x in os.getenv("ETF20", "").split(",") if x.strip()}
         return 0.20 if (b.startswith("588") or b in etf20) else 0.10
@@ -71,8 +79,49 @@ def _retry(fn, tries=2, delay=1.5):
     raise last
 
 
+def _fetch_daily_us(sym, start, end):
+    """美股日线:yfinance(雅虎,含复权);国内环境需容器配代理(DOCKER_PROXY)。"""
+    import yfinance as yf
+    t = yf.Ticker(bare(sym))
+    df = t.history(start=f"{start[:4]}-{start[4:6]}-{start[6:8]}",
+                   end=f"{end[:4]}-{end[4:6]}-{end[6:8]}", auto_adjust=True)
+    if df is None or df.empty:
+        return df
+    df = df.reset_index()
+    df["date"] = df["Date"].astype(str).str[:10]
+    df = df.rename(columns={"Open": "open", "High": "high", "Low": "low",
+                            "Close": "close", "Volume": "volume"})
+    df["turnover"] = df["close"] * df["volume"]
+    return df[["date", "open", "high", "low", "close", "volume", "turnover"]]
+
+
+def _fetch_daily_us_stooq(sym, start, end):
+    """美股备胎源:Stooq 免费日线 CSV(亦为复权价)。"""
+    import io
+    import requests
+    import pandas as pd
+    url = (f"https://stooq.com/q/d/l/?s={bare(sym).lower()}.us&i=d"
+           f"&d1={start}&d2={end}")
+    r = requests.get(url, timeout=30)
+    r.raise_for_status()
+    if not r.text or r.text.startswith("No data") or r.text.lstrip().startswith("<"):
+        raise RuntimeError("Stooq 返回非CSV(可能触发反爬验证,换网络环境或稍后再试)")
+    df = pd.read_csv(io.StringIO(r.text))
+    df = df.rename(columns={"Date": "date", "Open": "open", "High": "high",
+                            "Low": "low", "Close": "close", "Volume": "volume"})
+    df["date"] = df["date"].astype(str)
+    df["volume"] = df.get("Volume", df.get("volume", 0)).fillna(0) if "volume" in df else 0
+    df["turnover"] = df["close"] * df["volume"]
+    return df[["date", "open", "high", "low", "close", "volume", "turnover"]]
+
+
 def fetch_daily(sym, start, end, etf):
-    """拉日线,东财→新浪,返回标准列 DataFrame(volume 单位:股)。"""
+    """拉日线:A股走东财→新浪,美股(.US)走yfinance→Stooq。返回标准列 DataFrame。"""
+    if is_us(sym):
+        try:
+            return _retry(lambda: _fetch_daily_us(sym, start, end), tries=2)
+        except Exception:
+            return _retry(lambda: _fetch_daily_us_stooq(sym, start, end), tries=3)
     import akshare as ak
     b = bare(sym)
 
@@ -185,7 +234,14 @@ def incremental_update(db, sym, etf=None, today=None):
     return n, f"增量 {n} 天" if n else "无新交易日"
 
 
-def _lookup_name(b, etf):
+def _lookup_name(b, etf, us=False):
+    if us:
+        try:
+            import yfinance as yf
+            info = yf.Ticker(b).info
+            return info.get("shortName") or info.get("longName") or b
+        except Exception:
+            return b
     try:
         import akshare as ak
         if etf:
@@ -204,11 +260,14 @@ def _lookup_name(b, etf):
 
 
 def add_symbol(db, code):
-    """前端新增自选:归一化→判类型→全量拉取→写行情/名称/自选表。返回结果 dict。"""
+    """前端新增自选:归一化→判类型→全量拉取→写行情/名称/自选表。返回结果 dict。
+    支持:A股6位数字代码(600519/512480)、美股字母 ticker(AAPL/QQQ 或 AAPL.US)。"""
     sym = norm_symbol(code)
-    if not sym or len(bare(sym)) != 6 or not bare(sym).isdigit():
+    us = is_us(sym)
+    if not sym or (not us and (len(bare(sym)) != 6 or not bare(sym).isdigit())) \
+            or (us and not bare(sym).replace("-", "").isalpha()):
         return {"ok": False, "error": f"代码不合法:{code}"}
-    etf = is_etf(sym)
+    etf = is_etf(sym) and not us
     today = datetime.date.today().strftime("%Y%m%d")
     have = db["stock_market"].count_documents({"symbol": sym}, limit=1)
     if have:
@@ -223,16 +282,17 @@ def add_symbol(db, code):
         if not n:
             return {"ok": False, "error": "数据源返回空(代码是否正确?)"}
         note = f"全量拉取 {n} 条"
-    name = _lookup_name(bare(sym), etf)
+    name = _lookup_name(bare(sym), etf, us=us)
     db["stock_info_new"].update_one(
         {"symbol": sym},
         {"$set": {"symbol": sym, "code": bare(sym), "name": name, "type": 0}}, upsert=True)
     db[WATCH_COL].update_one(
         {"symbol": sym},
-        {"$set": {"symbol": sym, "name": name, "asset_type": "etf" if etf else "stock",
+        {"$set": {"symbol": sym, "name": name,
+                  "asset_type": "us" if us else ("etf" if etf else "stock"),
                   "source": "manual",
                   "added_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M")}}, upsert=True)
-    return {"ok": True, "symbol": sym, "name": name, "etf": etf, "bars": n, "note": note}
+    return {"ok": True, "symbol": sym, "name": name, "etf": etf, "us": us, "bars": n, "note": note}
 
 
 def remove_symbol(db, sym, protected=()):

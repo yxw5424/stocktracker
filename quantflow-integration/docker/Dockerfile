@@ -23,7 +23,7 @@ RUN sed -i 's#127\.0\.0\.1:27017#mongo:27017#; s#MONGO_TYPE: "replica_set"#MONGO
 RUN git clone https://github.com/PandaAI-Tech/panda_quantflow.git && \
     cd panda_quantflow && git checkout 688b90e74a738b84567efe622a2d9c1e5ce10e00
 RUN pip install -e ./panda_quantflow
-RUN pip install anthropic akshare openai   # akshare:看板资讯/行情;openai:Routine内跑复核官(DeepSeek)
+RUN pip install anthropic akshare openai yfinance   # akshare:A股行情/资讯;openai:DeepSeek;yfinance:美股日线(需代理)
 
 # 3) 放入 AI 节点 + 安全启动器 + 内置聊天换 Claude 补丁（context = quantflow-integration/）
 COPY ai_advisor_node.py ai_strategy_loop_node.py backtest_summary_node.py /app/panda_quantflow/src/panda_plugins/custom/

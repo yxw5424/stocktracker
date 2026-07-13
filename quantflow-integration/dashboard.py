@@ -133,6 +133,12 @@ def _is_etf(sym):
     return b.startswith("5") or b[:2] in ("15", "16")
 
 
+def _asset_label(sym):
+    if str(sym).upper().endswith(".US"):
+        return "美股"
+    return "ETF" if _is_etf(sym) else "股票"
+
+
 def screen():
     """选股器:全库标的的关键指标(涨跌/波动/均线位置/回撤/成交额)+迷你走势。"""
     out = {"asof": "", "rows": [], "error": ""}
@@ -171,7 +177,7 @@ def screen():
             tv20 = [float(d.get("turnover", 0) or 0) for d in docs[-20:]]
             out["rows"].append({
                 "symbol": sym, "name": names.get(sym, ""),
-                "type": "ETF" if _is_etf(sym) else "股票",
+                "type": _asset_label(sym),
                 "price": last, "r1": ret(1), "r5": ret(5), "r20": ret(20), "r60": ret(60),
                 "vol60": vol60, "ma20": ma_dist(20), "ma60": ma_dist(60), "ma120": ma_dist(120),
                 "dd60": round((last / hi60 - 1) * 100, 2) if hi60 else None,
@@ -491,6 +497,7 @@ code,kbd{background:#0d1320;border:1px solid var(--line);border-radius:4px;paddi
       <span class="chip on" data-f=all>全部</span>
       <span class=chip data-f=ETF>只看ETF</span>
       <span class=chip data-f=股票>只看股票</span>
+      <span class=chip data-f=美股>只看美股</span>
       <span class=chip data-f=ma120>站上MA120</span>
       <span class=chip data-f=lowvol>低波动(年化<25%)</span>
       <input type=text id=s_q placeholder="代码/名称过滤">
@@ -689,7 +696,7 @@ function renderScreen(){
   if(!S)return;
   if(S.error){document.getElementById('s_table').innerHTML=`<div class=err>${esc(S.error)}</div>`;return}
   let rows=(S.rows||[]).slice();
-  if(sFilter==='ETF'||sFilter==='股票')rows=rows.filter(x=>x.type===sFilter);
+  if(sFilter==='ETF'||sFilter==='股票'||sFilter==='美股')rows=rows.filter(x=>x.type===sFilter);
   if(sFilter==='ma120')rows=rows.filter(x=>num(x.ma120)!==null&&x.ma120>0);
   if(sFilter==='lowvol')rows=rows.filter(x=>num(x.vol60)!==null&&x.vol60<25);
   if(sQ)rows=rows.filter(x=>(x.symbol+x.name).toLowerCase().includes(sQ.toLowerCase()));
